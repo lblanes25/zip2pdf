@@ -1,0 +1,20 @@
+@echo off
+if "%~1"=="" (
+    echo Drag a ZIP file onto this icon to convert.
+    pause
+    exit
+)
+"%~dp0zip2pdf.exe" "%~1"
+pause
+```
+
+Now the user just drags their ZIP onto the `.bat` file, a console window opens showing progress, and the output ZIP appears next to the input. The `pause` at the end keeps the window open so they can read the summary.
+
+**Step 3: Distribute as a folder**
+
+Give them a folder like:
+```
+ZIP-to-PDF Converter/
+    zip2pdf.exe
+    Convert ZIP to PDF.bat
+    README.txt
