@@ -1,0 +1,430 @@
+"""
+Planning Sprawl Analysis
+========================
+Identifies planning-phase fields changed after fieldwork began,
+helping audit QA teams detect engagements where planning was never
+properly closed out.
+
+Inputs:
+  1. History log CSV  – exported from Archer (one row per field change)
+  2. Field-phase mapping – Excel or CSV with two columns: Phase, Field Name
+
+Outputs:
+  1. Detail workbook   – every flagged change with tier classification
+  2. Summary workbook  – engagement-level and field-level rollups
+"""
+
+import pandas as pd
+import numpy as np
+import re
+import sys
+from pathlib import Path
+from datetime import timedelta
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+from openpyxl.utils import get_column_letter
+
+# ============================================================
+# CONFIGURATION — UPDATE THESE TO MATCH YOUR ACTUAL DATA
+# ============================================================
+
+# -- Input files --
+HISTORY_LOG_PATH = "history_log.csv"
+FIELD_PHASE_MAPPING_PATH = "field_phase_mapping.xlsx"  # or .csv
+
+# -- History log column names --
+# Update these strings to match the exact column headers in your CSV.
+COL_AUDIT_ID = "Audit ID"              # e.g. "AUD-123"
+COL_FIELD_NAME = "Field Name"          # the field that was changed
+COL_CHANGE_DATE = "Change Date"        # when the change happened
+COL_CHANGED_BY = "Changed By"          # who made the change
+COL_CHANGE_DESC = "Change Description" # contains before/after values
+
+# -- Field-phase mapping column names --
+COL_PHASE = "Phase"
+COL_MAPPING_FIELD = "Field Name"
+
+# -- Milestone field names (as they appear in the history log) --
+# These are the field names whose "after" value represents a date milestone.
+# The script looks for these in the Field Name column of the history log
+# and parses the date from the Change Description.
+MILESTONE_FIELDS = {
+    "fieldwork_start": "Fieldwork Start Date",   # adjust to your actual field name
+    "fieldwork_end":   "Fieldwork End Date",      # adjust to your actual field name
+    "report_issued":   "Report Issuance Date",    # adjust to your actual field name
+    "planning_start":  "Planning Start Date",     # adjust to your actual field name
+}
+
+# -- How to parse the "after" value from the Change Description --
+# Common patterns:
+#   "Changed from 'X' to 'Y'"
+#   "null → 2025-03-15"
+#   "Set to 2025-03-15"
+#   "Old: X | New: Y"
+# The function below tries several patterns. Adjust as needed.
+def parse_after_value(change_desc):
+    """Extract the 'after' value from a change description string."""
+    if pd.isna(change_desc):
+        return None
+    desc = str(change_desc).strip()
+
+    # Pattern: "Changed from '...' to '...'"  or  "from ... to ..."
+    m = re.search(r"to\s+['\"]?(.+?)['\"]?\s*$", desc, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # Pattern: "... → ..."  or  "... -> ..."
+    m = re.search(r"[→\->]+\s*(.+)$", desc)
+    if m:
+        return m.group(1).strip()
+
+    # Pattern: "Set to ..."
+    m = re.search(r"set\s+to\s+(.+)$", desc, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # Pattern: "New: ..."  or  "| New: ..."
+    m = re.search(r"new:\s*(.+)$", desc, re.IGNORECASE)
+    if m:
+        return m.group(1).strip()
+
+    # Fallback: return the whole string (user can inspect)
+    return desc
+
+# -- Phase of interest --
+PHASE_OF_INTEREST = "Planning"  # must match your mapping file exactly
+
+# -- Tier 2 window: planning changes within this many days of report issuance --
+TIER_2_DAYS_BEFORE_REPORT = 10
+
+# -- Output file names --
+OUTPUT_DETAIL = "planning_sprawl_detail.xlsx"
+OUTPUT_SUMMARY = "planning_sprawl_summary.xlsx"
+
+
+# ============================================================
+# MAIN ANALYSIS
+# ============================================================
+
+def load_history_log(path):
+    """Load and clean the history log CSV."""
+    df = pd.read_csv(path, dtype=str)
+    df[COL_CHANGE_DATE] = pd.to_datetime(df[COL_CHANGE_DATE], errors="coerce")
+    print(f"  Loaded history log: {len(df):,} rows, {df[COL_AUDIT_ID].nunique()} engagements")
+    return df
+
+def load_field_phase_mapping(path):
+    """Load field-phase mapping from Excel or CSV."""
+    p = Path(path)
+    if p.suffix in (".xlsx", ".xls"):
+        df = pd.read_excel(path, dtype=str)
+    else:
+        df = pd.read_csv(path, dtype=str)
+    df[COL_MAPPING_FIELD] = df[COL_MAPPING_FIELD].str.strip()
+    df[COL_PHASE] = df[COL_PHASE].str.strip()
+    print(f"  Loaded field-phase mapping: {len(df)} fields across {df[COL_PHASE].nunique()} phases")
+    return df
+
+def extract_milestones(history_df):
+    """
+    Extract milestone dates per engagement from the history log.
+    For each milestone field, finds the LAST change and parses the 'after' date.
+    Returns a DataFrame: Audit ID | fieldwork_start | fieldwork_end | report_issued | planning_start
+    """
+    records = []
+    for milestone_key, field_name in MILESTONE_FIELDS.items():
+        subset = history_df[history_df[COL_FIELD_NAME].str.strip() == field_name].copy()
+        if subset.empty:
+            print(f"  WARNING: No history rows found for milestone field '{field_name}'")
+            continue
+
+        # Take the last change per engagement (by change date)
+        subset = subset.sort_values(COL_CHANGE_DATE).groupby(COL_AUDIT_ID).last().reset_index()
+        subset["_parsed_date"] = subset[COL_CHANGE_DESC].apply(parse_after_value)
+        subset["_parsed_date"] = pd.to_datetime(subset["_parsed_date"], errors="coerce")
+
+        for _, row in subset.iterrows():
+            records.append({
+                COL_AUDIT_ID: row[COL_AUDIT_ID],
+                "milestone": milestone_key,
+                "date": row["_parsed_date"],
+            })
+
+    if not records:
+        print("\n  ERROR: Could not extract any milestone dates.")
+        print("  Check that MILESTONE_FIELDS names match your history log exactly.")
+        sys.exit(1)
+
+    mdf = pd.DataFrame(records)
+    milestones = mdf.pivot_table(index=COL_AUDIT_ID, columns="milestone", values="date", aggfunc="last")
+    milestones = milestones.reset_index()
+
+    found = [c for c in milestones.columns if c != COL_AUDIT_ID]
+    print(f"  Extracted milestones for {len(milestones)} engagements: {', '.join(found)}")
+
+    # Report any engagements missing fieldwork_start
+    if "fieldwork_start" in milestones.columns:
+        missing = milestones["fieldwork_start"].isna().sum()
+        if missing > 0:
+            print(f"  WARNING: {missing} engagements missing fieldwork_start date")
+
+    return milestones
+
+def classify_changes(history_df, mapping_df, milestones_df):
+    """
+    Join history with phase mapping and milestones.
+    Flag planning-phase changes that occurred after fieldwork start.
+    Classify into Tier 1 (after fieldwork start) and Tier 2 (within N days of report issuance).
+    """
+    # Normalize field names for joining
+    history_df["_field_join"] = history_df[COL_FIELD_NAME].str.strip()
+    mapping_df["_field_join"] = mapping_df[COL_MAPPING_FIELD].str.strip()
+
+    # Join: history ← mapping (to get phase for each change)
+    merged = history_df.merge(
+        mapping_df[[COL_PHASE, "_field_join"]],
+        on="_field_join",
+        how="inner"
+    )
+
+    # Filter to phase of interest
+    planning = merged[merged[COL_PHASE].str.strip().str.lower() == PHASE_OF_INTEREST.lower()].copy()
+    print(f"  Planning-phase changes found: {len(planning):,}")
+
+    # Join milestones
+    planning = planning.merge(milestones_df, on=COL_AUDIT_ID, how="left")
+
+    # Filter to changes AFTER fieldwork start
+    if "fieldwork_start" not in planning.columns:
+        print("  ERROR: 'fieldwork_start' milestone not found. Cannot classify.")
+        sys.exit(1)
+
+    late = planning[planning[COL_CHANGE_DATE] > planning["fieldwork_start"]].copy()
+    print(f"  Planning changes after fieldwork start: {len(late):,}")
+
+    # Compute metrics
+    late["Days After FW Start"] = (late[COL_CHANGE_DATE] - late["fieldwork_start"]).dt.days
+
+    if "report_issued" in late.columns:
+        late["Days Before Report"] = (late["report_issued"] - late[COL_CHANGE_DATE]).dt.days
+        late["Tier"] = np.where(
+            late["Days Before Report"] <= TIER_2_DAYS_BEFORE_REPORT,
+            "Tier 2 - Near Report Issuance",
+            "Tier 1 - During Fieldwork"
+        )
+    else:
+        late["Days Before Report"] = np.nan
+        late["Tier"] = "Tier 1 - During Fieldwork"
+
+    # Compute fieldwork duration for sprawl percentage
+    if "fieldwork_end" in late.columns:
+        fw_duration = (late["fieldwork_end"] - late["fieldwork_start"]).dt.days
+    elif "report_issued" in late.columns:
+        fw_duration = (late["report_issued"] - late["fieldwork_start"]).dt.days
+    else:
+        fw_duration = np.nan
+
+    late["FW Duration (days)"] = fw_duration
+    late["Planning Sprawl %"] = np.where(
+        fw_duration > 0,
+        (late["Days After FW Start"] / fw_duration * 100).round(1),
+        np.nan
+    )
+
+    return late
+
+def build_detail_output(late_df):
+    """Build the detail DataFrame for output."""
+    cols = [
+        COL_AUDIT_ID,
+        COL_FIELD_NAME,
+        COL_CHANGED_BY,
+        COL_CHANGE_DATE,
+        COL_CHANGE_DESC,
+        "fieldwork_start",
+        "Days After FW Start",
+        "Tier",
+    ]
+    if "report_issued" in late_df.columns:
+        cols.insert(7, "report_issued")
+        cols.insert(8, "Days Before Report")
+
+    detail = late_df[cols].copy()
+    detail = detail.sort_values([COL_AUDIT_ID, COL_CHANGE_DATE])
+    detail = detail.rename(columns={
+        "fieldwork_start": "Fieldwork Start",
+        "report_issued": "Report Issued" if "report_issued" in late_df.columns else "report_issued",
+    })
+    return detail
+
+def build_engagement_summary(late_df):
+    """Engagement-level summary."""
+    groups = late_df.groupby(COL_AUDIT_ID)
+
+    summary = groups.agg(
+        Total_Late_Planning_Changes=(COL_FIELD_NAME, "count"),
+        Tier_1_Count=("Tier", lambda x: (x == "Tier 1 - During Fieldwork").sum()),
+        Tier_2_Count=("Tier", lambda x: (x == "Tier 2 - Near Report Issuance").sum()),
+        Last_Planning_Change=(COL_CHANGE_DATE, "max"),
+        Fieldwork_Start=("fieldwork_start", "first"),
+        Max_Days_After_FW_Start=("Days After FW Start", "max"),
+        Max_Planning_Sprawl_Pct=("Planning Sprawl %", "max"),
+        Unique_Fields_Changed=(COL_FIELD_NAME, "nunique"),
+    ).reset_index()
+
+    # Top fields per engagement
+    top_fields = groups[COL_FIELD_NAME].apply(
+        lambda x: ", ".join(x.value_counts().head(5).index.tolist())
+    ).reset_index(name="Top Fields Changed Late")
+
+    summary = summary.merge(top_fields, on=COL_AUDIT_ID)
+
+    if "report_issued" in late_df.columns:
+        ri = late_df.groupby(COL_AUDIT_ID)["report_issued"].first().reset_index(name="Report_Issued")
+        summary = summary.merge(ri, on=COL_AUDIT_ID, how="left")
+
+    summary = summary.sort_values("Total_Late_Planning_Changes", ascending=False)
+
+    # Clean up column names
+    summary.columns = [c.replace("_", " ") for c in summary.columns]
+    return summary
+
+def build_field_summary(late_df):
+    """Field-level summary across all engagements."""
+    groups = late_df.groupby(COL_FIELD_NAME)
+
+    summary = groups.agg(
+        Engagements_Affected=(COL_AUDIT_ID, "nunique"),
+        Total_Late_Changes=(COL_AUDIT_ID, "count"),
+        Tier_2_Changes=("Tier", lambda x: (x == "Tier 2 - Near Report Issuance").sum()),
+        Avg_Days_After_FW_Start=("Days After FW Start", "mean"),
+        Unique_Changers=(COL_CHANGED_BY, "nunique"),
+    ).reset_index()
+
+    summary["Avg Days After FW Start"] = summary["Avg_Days_After_FW_Start"].round(1)
+    summary = summary.drop(columns=["Avg_Days_After_FW_Start"])
+
+    summary.columns = [c.replace("_", " ") for c in summary.columns]
+    summary = summary.sort_values("Total Late Changes", ascending=False)
+    return summary
+
+def format_worksheet(ws, header_fill, header_font):
+    """Apply basic professional formatting to a worksheet."""
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
+    )
+
+    for col_idx in range(1, ws.max_column + 1):
+        ws.cell(row=1, column=col_idx).font = header_font
+        ws.cell(row=1, column=col_idx).fill = header_fill
+        ws.cell(row=1, column=col_idx).alignment = Alignment(horizontal="center", wrap_text=True)
+
+    for row in ws.iter_rows(min_row=1, max_row=ws.max_row, max_col=ws.max_column):
+        for cell in row:
+            cell.border = thin_border
+            if cell.row > 1:
+                cell.alignment = Alignment(vertical="top", wrap_text=True)
+
+    # Auto-width (capped)
+    for col_idx in range(1, ws.max_column + 1):
+        max_len = 0
+        for row in ws.iter_rows(min_row=1, max_row=min(50, ws.max_row), min_col=col_idx, max_col=col_idx):
+            for cell in row:
+                if cell.value:
+                    max_len = max(max_len, len(str(cell.value)))
+        ws.column_dimensions[get_column_letter(col_idx)].width = min(max_len + 4, 40)
+
+def save_formatted_excel(dataframes_and_names, output_path):
+    """Save DataFrames to a formatted Excel workbook."""
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        for df, sheet_name in dataframes_and_names:
+            df.to_excel(writer, sheet_name=sheet_name, index=False)
+
+    wb = load_workbook(output_path)
+    header_fill = PatternFill("solid", fgColor="1F4E79")
+    header_font = Font(bold=True, color="FFFFFF", name="Arial", size=10)
+
+    for ws in wb.worksheets:
+        format_worksheet(ws, header_fill, header_font)
+        ws.auto_filter.ref = ws.dimensions
+        ws.freeze_panes = "A2"
+
+    wb.save(output_path)
+
+def print_quick_stats(late_df, engagement_summary, field_summary):
+    """Print key findings to console."""
+    print("\n" + "=" * 60)
+    print("QUICK STATS")
+    print("=" * 60)
+    total_eng = late_df[COL_AUDIT_ID].nunique()
+    total_changes = len(late_df)
+    tier2 = (late_df["Tier"] == "Tier 2 - Near Report Issuance").sum()
+
+    print(f"  Engagements with late planning changes: {total_eng}")
+    print(f"  Total late planning changes:            {total_changes:,}")
+    print(f"  Tier 2 changes (within {TIER_2_DAYS_BEFORE_REPORT}d of report): {tier2:,}")
+
+    if not field_summary.empty:
+        top = field_summary.head(5)
+        print(f"\n  Top 5 fields changed late:")
+        for _, row in top.iterrows():
+            print(f"    - {row.iloc[0]}: {int(row.iloc[2])} changes across {int(row.iloc[1])} engagements")
+
+    # Worst offenders
+    if not engagement_summary.empty:
+        worst = engagement_summary.head(5)
+        print(f"\n  Top 5 engagements by late planning changes:")
+        for _, row in worst.iterrows():
+            print(f"    - {row.iloc[0]}: {int(row.iloc[1])} changes")
+
+    print("=" * 60)
+
+
+def main():
+    print("\n=== Planning Sprawl Analysis ===\n")
+
+    # 1. Load data
+    print("Loading data...")
+    history_df = load_history_log(HISTORY_LOG_PATH)
+    mapping_df = load_field_phase_mapping(FIELD_PHASE_MAPPING_PATH)
+
+    # 2. Extract milestones from history log
+    print("\nExtracting milestone dates...")
+    milestones_df = extract_milestones(history_df)
+
+    # 3. Classify changes
+    print("\nClassifying late planning changes...")
+    late_df = classify_changes(history_df, mapping_df, milestones_df)
+
+    if late_df.empty:
+        print("\n  No late planning changes found. Analysis complete.")
+        return
+
+    # 4. Build outputs
+    print("\nBuilding outputs...")
+    detail = build_detail_output(late_df)
+    eng_summary = build_engagement_summary(late_df)
+    field_summary = build_field_summary(late_df)
+
+    # 5. Save
+    save_formatted_excel(
+        [(detail, "Late Planning Changes")],
+        OUTPUT_DETAIL,
+    )
+    save_formatted_excel(
+        [(eng_summary, "By Engagement"), (field_summary, "By Field")],
+        OUTPUT_SUMMARY,
+    )
+
+    print(f"\n  Detail file:  {OUTPUT_DETAIL}")
+    print(f"  Summary file: {OUTPUT_SUMMARY}")
+
+    # 6. Console stats
+    print_quick_stats(late_df, eng_summary, field_summary)
+
+
+if __name__ == "__main__":
+    main()
