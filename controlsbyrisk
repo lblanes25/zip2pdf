@@ -1,0 +1,238 @@
+"""
+Controls-per-Risk Analysis
+─────────────────────────
+Reads an Excel file of audit controls, each tagged to one or more risks,
+and produces:
+  1. Average number of controls per risk, grouped by Risk Rating
+  2. Same breakdown split by Control Type (Preventive / Detective)
+  3. By Engagement: avg controls per risk within each engagement, with type split
+  4. A detail table: control count per individual risk
+
+Usage:
+  1. Update INPUT_FILE and column name constants below to match your file.
+  2. Run:  python controls_by_risk.py
+"""
+
+import pandas as pd
+from pathlib import Path
+
+# ── CONFIG ───────────────────────────────────────────────────────────────
+INPUT_FILE = "controls_data.xlsx"       # path to your Excel file
+SHEET_NAME = 0                          # sheet index or name
+
+# Column names — adjust these to match your file exactly
+COL_CONTROL_ID   = "Control ID"
+COL_CONTROL_TYPE = "Control Type"       # Preventive / Detective
+COL_RISK_IDS     = "Risk ID(s)"         # may contain multiple, separated by comma/semicolon
+COL_RISK_RATING  = "Risk Rating"
+COL_ENGAGEMENT   = "Engagement ID"
+
+# Risk rating display order
+RATING_ORDER = ["Low", "Medium", "High", "Critical"]
+
+# Delimiter(s) used when a control maps to multiple risks
+RISK_DELIMITERS = r"[;,|]"             # splits on ; or , or |
+# ─────────────────────────────────────────────────────────────────────────
+
+
+def load_and_explode(filepath: str) -> pd.DataFrame:
+    """Load the Excel file and explode multi-risk rows into one row per
+    control–risk pair."""
+    df = pd.read_excel(filepath, sheet_name=SHEET_NAME)
+
+    # Standardize column names (strip whitespace)
+    df.columns = df.columns.str.strip()
+
+    # Split the Risk ID(s) column and explode
+    df[COL_RISK_IDS] = (
+        df[COL_RISK_IDS]
+        .astype(str)
+        .str.split(RISK_DELIMITERS)
+    )
+    df = df.explode(COL_RISK_IDS)
+    df[COL_RISK_IDS] = df[COL_RISK_IDS].str.strip()
+
+    # Normalize risk rating for consistent grouping
+    df[COL_RISK_RATING] = df[COL_RISK_RATING].str.strip().str.title()
+
+    # Normalize control type
+    df[COL_CONTROL_TYPE] = df[COL_CONTROL_TYPE].str.strip().str.title()
+
+    return df
+
+
+def avg_controls_per_risk_by_rating(df: pd.DataFrame) -> pd.DataFrame:
+    """For each risk, count distinct controls, then average those counts
+    by risk rating."""
+    controls_per_risk = (
+        df.groupby([COL_RISK_IDS, COL_RISK_RATING])[COL_CONTROL_ID]
+        .nunique()
+        .reset_index(name="Control_Count")
+    )
+
+    summary = (
+        controls_per_risk
+        .groupby(COL_RISK_RATING)["Control_Count"]
+        .agg(["mean", "median", "min", "max", "count"])
+        .rename(columns={
+            "mean":   "Avg Controls per Risk",
+            "median": "Median",
+            "min":    "Min",
+            "max":    "Max",
+            "count":  "Number of Risks",
+        })
+        .reindex(RATING_ORDER)
+        .dropna(how="all")
+    )
+
+    return summary
+
+
+def avg_controls_by_rating_and_type(df: pd.DataFrame) -> pd.DataFrame:
+    """Same as above but further split by Preventive / Detective."""
+    controls_per_risk = (
+        df.groupby([COL_RISK_IDS, COL_RISK_RATING, COL_CONTROL_TYPE])[COL_CONTROL_ID]
+        .nunique()
+        .reset_index(name="Control_Count")
+    )
+
+    summary = (
+        controls_per_risk
+        .groupby([COL_RISK_RATING, COL_CONTROL_TYPE])["Control_Count"]
+        .agg(["mean", "median", "min", "max", "count"])
+        .rename(columns={
+            "mean":   "Avg Controls per Risk",
+            "median": "Median",
+            "min":    "Min",
+            "max":    "Max",
+            "count":  "Number of Risks",
+        })
+    )
+
+    # Reorder by rating
+    summary = summary.reindex(RATING_ORDER, level=COL_RISK_RATING)
+
+    return summary
+
+
+def detail_table(df: pd.DataFrame) -> pd.DataFrame:
+    """Full detail: control count per risk, with type breakdown."""
+    detail = (
+        df.groupby([COL_ENGAGEMENT, COL_RISK_IDS, COL_RISK_RATING])
+        .agg(
+            Total_Controls   = (COL_CONTROL_ID, "nunique"),
+            Preventive_Count = (COL_CONTROL_TYPE, lambda x: (x == "Preventive").sum()),
+            Detective_Count  = (COL_CONTROL_TYPE, lambda x: (x == "Detective").sum()),
+        )
+        .reset_index()
+        .sort_values([COL_ENGAGEMENT, COL_RISK_RATING, COL_RISK_IDS],
+                     key=lambda col: col.map({r: i for i, r in enumerate(RATING_ORDER)})
+                     if col.name == COL_RISK_RATING else col)
+    )
+
+    return detail
+
+
+def by_engagement(df: pd.DataFrame) -> pd.DataFrame:
+    """Per engagement: avg controls per risk, split by rating and type.
+    Useful for spotting engagements that over- or under-control relative
+    to peers at the same risk rating."""
+    # Count controls per risk within each engagement
+    controls_per_risk = (
+        df.groupby([COL_ENGAGEMENT, COL_RISK_IDS, COL_RISK_RATING])[COL_CONTROL_ID]
+        .nunique()
+        .reset_index(name="Control_Count")
+    )
+
+    # Also count by type
+    type_counts = (
+        df.groupby([COL_ENGAGEMENT, COL_RISK_IDS, COL_RISK_RATING, COL_CONTROL_TYPE])[COL_CONTROL_ID]
+        .nunique()
+        .reset_index(name="Count")
+    )
+    type_pivot = (
+        type_counts
+        .pivot_table(index=[COL_ENGAGEMENT, COL_RISK_IDS, COL_RISK_RATING],
+                     columns=COL_CONTROL_TYPE, values="Count", fill_value=0)
+        .reset_index()
+    )
+
+    # Merge total and type counts
+    merged = controls_per_risk.merge(type_pivot, on=[COL_ENGAGEMENT, COL_RISK_IDS, COL_RISK_RATING])
+
+    # Aggregate: average per engagement + rating
+    agg_cols = {"Control_Count": ["mean", "count"]}
+    for t in ["Preventive", "Detective"]:
+        if t in merged.columns:
+            agg_cols[t] = "mean"
+
+    summary = (
+        merged
+        .groupby([COL_ENGAGEMENT, COL_RISK_RATING])
+        .agg(**{
+            "Avg Controls per Risk":   ("Control_Count", "mean"),
+            "Number of Risks":         ("Control_Count", "count"),
+            **({f"Avg Preventive": ("Preventive", "mean")} if "Preventive" in merged.columns else {}),
+            **({f"Avg Detective":  ("Detective", "mean")}  if "Detective"  in merged.columns else {}),
+        })
+        .reset_index()
+        .sort_values([COL_ENGAGEMENT, COL_RISK_RATING],
+                     key=lambda col: col.map({r: i for i, r in enumerate(RATING_ORDER)})
+                     if col.name == COL_RISK_RATING else col)
+    )
+
+    return summary
+
+
+def main():
+    filepath = Path(INPUT_FILE)
+    if not filepath.exists():
+        print(f"File not found: {filepath.resolve()}")
+        print("Update INPUT_FILE in the script and re-run.")
+        return
+
+    df = load_and_explode(str(filepath))
+    print(f"Loaded {len(df)} control–risk pairs "
+          f"({df[COL_CONTROL_ID].nunique()} unique controls, "
+          f"{df[COL_RISK_IDS].nunique()} unique risks, "
+          f"{df[COL_ENGAGEMENT].nunique()} engagements)\n")
+
+    # ── Report 1: Average controls per risk by rating ──
+    print("=" * 60)
+    print("AVG CONTROLS PER RISK — BY RISK RATING")
+    print("=" * 60)
+    print(avg_controls_per_risk_by_rating(df).to_string(float_format="%.1f"))
+
+    # ── Report 2: Split by Preventive / Detective ──
+    print("\n" + "=" * 60)
+    print("AVG CONTROLS PER RISK — BY RATING & CONTROL TYPE")
+    print("=" * 60)
+    print(avg_controls_by_rating_and_type(df).to_string(float_format="%.1f"))
+
+    # ── Report 3: By Engagement ──
+    print("\n" + "=" * 60)
+    print("AVG CONTROLS PER RISK — BY ENGAGEMENT & RATING")
+    print("=" * 60)
+    eng = by_engagement(df)
+    print(eng.to_string(index=False, float_format="%.1f"))
+
+    # ── Report 4: Detail per risk ──
+    print("\n" + "=" * 60)
+    print("DETAIL: CONTROL COUNT PER RISK")
+    print("=" * 60)
+    detail = detail_table(df)
+    print(detail.to_string(index=False))
+
+    # ── Export to Excel ──
+    output_file = "controls_by_risk_analysis.xlsx"
+    with pd.ExcelWriter(output_file, engine="openpyxl") as writer:
+        avg_controls_per_risk_by_rating(df).to_excel(writer, sheet_name="By Rating")
+        avg_controls_by_rating_and_type(df).to_excel(writer, sheet_name="By Rating & Type")
+        by_engagement(df).to_excel(writer, sheet_name="By Engagement", index=False)
+        detail_table(df).to_excel(writer, sheet_name="Detail", index=False)
+
+    print(f"\nResults exported to: {output_file}")
+
+
+if __name__ == "__main__":
+    main()
