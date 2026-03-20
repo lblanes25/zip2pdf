@@ -6,7 +6,10 @@ and produces:
   1. Average number of controls per risk, grouped by Risk Rating
   2. Same breakdown split by Control Type (Preventive / Detective)
   3. By Engagement: avg controls per risk within each engagement, with type split
-  4. A detail table: control count per individual risk
+  4. Preventive-to-Detective ratio by Risk Rating
+  5. Detective-Only Risks: risks with zero preventive controls (flagged by rating)
+  6. Control type distribution by Engagement vs. org-wide baseline
+  7. A detail table: control count per individual risk
 
 Usage:
   1. Update INPUT_FILE and column name constants below to match your file.
@@ -184,6 +187,132 @@ def by_engagement(df: pd.DataFrame) -> pd.DataFrame:
     return summary
 
 
+def preventive_detective_ratio(df: pd.DataFrame) -> pd.DataFrame:
+    """Preventive-to-Detective ratio by Risk Rating.
+    A ratio > 1 means more preventive than detective controls.
+    Higher-rated risks should ideally skew preventive."""
+    type_counts = (
+        df.groupby([COL_RISK_RATING, COL_CONTROL_TYPE])[COL_CONTROL_ID]
+        .nunique()
+        .reset_index(name="Control_Count")
+    )
+
+    pivot = (
+        type_counts
+        .pivot_table(index=COL_RISK_RATING, columns=COL_CONTROL_TYPE,
+                     values="Control_Count", fill_value=0)
+        .reindex(RATING_ORDER)
+        .dropna(how="all")
+    )
+
+    # Ensure both columns exist
+    for col in ["Preventive", "Detective"]:
+        if col not in pivot.columns:
+            pivot[col] = 0
+
+    pivot["Total"] = pivot["Preventive"] + pivot["Detective"]
+    pivot["Preventive %"] = (pivot["Preventive"] / pivot["Total"] * 100).round(1)
+    pivot["Detective %"] = (pivot["Detective"] / pivot["Total"] * 100).round(1)
+    pivot["P:D Ratio"] = pivot.apply(
+        lambda r: f"{r['Preventive'] / r['Detective']:.2f}" if r["Detective"] > 0 else "N/A (no detective)",
+        axis=1
+    )
+
+    return pivot
+
+
+def detective_only_risks(df: pd.DataFrame) -> pd.DataFrame:
+    """Flag risks that have ZERO preventive controls.
+    Sorted by rating so High/Critical surface first."""
+    risk_types = (
+        df.groupby([COL_RISK_IDS, COL_RISK_RATING, COL_ENGAGEMENT, COL_CONTROL_TYPE])[COL_CONTROL_ID]
+        .nunique()
+        .reset_index(name="Count")
+    )
+
+    pivot = (
+        risk_types
+        .pivot_table(index=[COL_RISK_IDS, COL_RISK_RATING, COL_ENGAGEMENT],
+                     columns=COL_CONTROL_TYPE, values="Count", fill_value=0)
+        .reset_index()
+    )
+
+    # Ensure Preventive column exists
+    if "Preventive" not in pivot.columns:
+        pivot["Preventive"] = 0
+    if "Detective" not in pivot.columns:
+        pivot["Detective"] = 0
+
+    # Filter to only detective (zero preventive)
+    detective_only = pivot[pivot["Preventive"] == 0].copy()
+
+    # Add a severity flag
+    severity_map = {"Critical": "URGENT", "High": "HIGH", "Medium": "REVIEW", "Low": "INFO"}
+    detective_only["Flag"] = detective_only[COL_RISK_RATING].map(severity_map).fillna("")
+
+    detective_only = detective_only.sort_values(
+        [COL_RISK_RATING, COL_ENGAGEMENT, COL_RISK_IDS],
+        key=lambda col: col.map({r: i for i, r in enumerate(RATING_ORDER)})
+        if col.name == COL_RISK_RATING else col
+    )
+
+    return detective_only
+
+
+def type_distribution_by_engagement(df: pd.DataFrame) -> pd.DataFrame:
+    """Per engagement + rating: preventive %, detective %, and the
+    org-wide baseline for comparison. Highlights engagements that
+    deviate significantly from the norm."""
+    # Org-wide baseline
+    org_counts = (
+        df.groupby([COL_RISK_RATING, COL_CONTROL_TYPE])[COL_CONTROL_ID]
+        .nunique()
+        .reset_index(name="Count")
+    )
+    org_pivot = org_counts.pivot_table(
+        index=COL_RISK_RATING, columns=COL_CONTROL_TYPE,
+        values="Count", fill_value=0
+    )
+    for col in ["Preventive", "Detective"]:
+        if col not in org_pivot.columns:
+            org_pivot[col] = 0
+    org_pivot["Org Preventive %"] = (
+        org_pivot["Preventive"] / (org_pivot["Preventive"] + org_pivot["Detective"]) * 100
+    ).round(1)
+    org_baseline = org_pivot["Org Preventive %"].to_dict()
+
+    # Per-engagement counts
+    eng_counts = (
+        df.groupby([COL_ENGAGEMENT, COL_RISK_RATING, COL_CONTROL_TYPE])[COL_CONTROL_ID]
+        .nunique()
+        .reset_index(name="Count")
+    )
+    eng_pivot = (
+        eng_counts
+        .pivot_table(index=[COL_ENGAGEMENT, COL_RISK_RATING],
+                     columns=COL_CONTROL_TYPE, values="Count", fill_value=0)
+        .reset_index()
+    )
+
+    for col in ["Preventive", "Detective"]:
+        if col not in eng_pivot.columns:
+            eng_pivot[col] = 0
+
+    eng_pivot["Total"] = eng_pivot["Preventive"] + eng_pivot["Detective"]
+    eng_pivot["Preventive %"] = (eng_pivot["Preventive"] / eng_pivot["Total"] * 100).round(1)
+    eng_pivot["Org Baseline Preventive %"] = eng_pivot[COL_RISK_RATING].map(org_baseline)
+    eng_pivot["Deviation (pp)"] = (eng_pivot["Preventive %"] - eng_pivot["Org Baseline Preventive %"]).round(1)
+
+    eng_pivot = eng_pivot.sort_values(
+        [COL_RISK_RATING, "Deviation (pp)"],
+        key=lambda col: col.map({r: i for i, r in enumerate(RATING_ORDER)})
+        if col.name == COL_RISK_RATING else col,
+        ascending=[True, True]
+    )
+
+    return eng_pivot
+
+
 def main():
     filepath = Path(INPUT_FILE)
     if not filepath.exists():
@@ -216,7 +345,32 @@ def main():
     eng = by_engagement(df)
     print(eng.to_string(index=False, float_format="%.1f"))
 
-    # ── Report 4: Detail per risk ──
+    # ── Report 4: Preventive-to-Detective Ratio ──
+    print("\n" + "=" * 60)
+    print("PREVENTIVE-TO-DETECTIVE RATIO BY RISK RATING")
+    print("=" * 60)
+    ratio = preventive_detective_ratio(df)
+    print(ratio.to_string())
+
+    # ── Report 5: Detective-Only Risks ──
+    print("\n" + "=" * 60)
+    print("DETECTIVE-ONLY RISKS (ZERO PREVENTIVE CONTROLS)")
+    print("=" * 60)
+    det_only = detective_only_risks(df)
+    if len(det_only) == 0:
+        print("None found — all risks have at least one preventive control.")
+    else:
+        print(f"Found {len(det_only)} risks with no preventive controls:")
+        print(det_only.to_string(index=False))
+
+    # ── Report 6: Type Distribution by Engagement ──
+    print("\n" + "=" * 60)
+    print("CONTROL TYPE DISTRIBUTION BY ENGAGEMENT vs ORG BASELINE")
+    print("=" * 60)
+    dist = type_distribution_by_engagement(df)
+    print(dist.to_string(index=False, float_format="%.1f"))
+
+    # ── Report 7: Detail per risk ──
     print("\n" + "=" * 60)
     print("DETAIL: CONTROL COUNT PER RISK")
     print("=" * 60)
@@ -229,6 +383,9 @@ def main():
         avg_controls_per_risk_by_rating(df).to_excel(writer, sheet_name="By Rating")
         avg_controls_by_rating_and_type(df).to_excel(writer, sheet_name="By Rating & Type")
         by_engagement(df).to_excel(writer, sheet_name="By Engagement", index=False)
+        preventive_detective_ratio(df).to_excel(writer, sheet_name="P-D Ratio")
+        detective_only_risks(df).to_excel(writer, sheet_name="Detective-Only Risks", index=False)
+        type_distribution_by_engagement(df).to_excel(writer, sheet_name="Type Dist by Engagement", index=False)
         detail_table(df).to_excel(writer, sheet_name="Detail", index=False)
 
     print(f"\nResults exported to: {output_file}")
