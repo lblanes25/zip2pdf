@@ -313,6 +313,37 @@ def type_distribution_by_engagement(df: pd.DataFrame) -> pd.DataFrame:
     return eng_pivot
 
 
+def single_control_risks(df: pd.DataFrame) -> pd.DataFrame:
+    """Per risk rating: what % of risks have only one control mapped?
+    High percentages at Critical/High ratings signal thin coverage."""
+    controls_per_risk = (
+        df.groupby([COL_RISK_IDS, COL_RISK_RATING])[COL_CONTROL_ID]
+        .nunique()
+        .reset_index(name="Control_Count")
+    )
+
+    total_by_rating = (
+        controls_per_risk
+        .groupby(COL_RISK_RATING)[COL_RISK_IDS]
+        .count()
+        .rename("Total Risks")
+    )
+
+    single_by_rating = (
+        controls_per_risk[controls_per_risk["Control_Count"] == 1]
+        .groupby(COL_RISK_RATING)[COL_RISK_IDS]
+        .count()
+        .rename("Single-Control Risks")
+    )
+
+    summary = pd.concat([total_by_rating, single_by_rating], axis=1).fillna(0)
+    summary["Single-Control Risks"] = summary["Single-Control Risks"].astype(int)
+    summary["% Single-Control"] = (summary["Single-Control Risks"] / summary["Total Risks"] * 100).round(1)
+    summary = summary.reindex(RATING_ORDER).dropna(how="all")
+
+    return summary
+
+
 def main():
     filepath = Path(INPUT_FILE)
     if not filepath.exists():
@@ -370,7 +401,14 @@ def main():
     dist = type_distribution_by_engagement(df)
     print(dist.to_string(index=False, float_format="%.1f"))
 
-    # ── Report 7: Detail per risk ──
+    # ── Report 7: Single-Control Risks ──
+    print("\n" + "=" * 60)
+    print("% OF RISKS WITH ONLY 1 CONTROL — BY RISK RATING")
+    print("=" * 60)
+    single = single_control_risks(df)
+    print(single.to_string())
+
+    # ── Report 8: Detail per risk ──
     print("\n" + "=" * 60)
     print("DETAIL: CONTROL COUNT PER RISK")
     print("=" * 60)
@@ -386,6 +424,7 @@ def main():
         preventive_detective_ratio(df).to_excel(writer, sheet_name="P-D Ratio")
         detective_only_risks(df).to_excel(writer, sheet_name="Detective-Only Risks", index=False)
         type_distribution_by_engagement(df).to_excel(writer, sheet_name="Type Dist by Engagement", index=False)
+        single_control_risks(df).to_excel(writer, sheet_name="Single-Control Risks")
         detail_table(df).to_excel(writer, sheet_name="Detail", index=False)
 
     print(f"\nResults exported to: {output_file}")
