@@ -1,0 +1,54 @@
+PROMPT (copy everything below this line)
+You are helping me configure a Python risk taxonomy transformation script. The script is attached. It has three placeholder configuration sections that need to be populated with my actual data. Your job is to read my crosswalk information below and produce updated versions of these three config sections ONLY — do not rewrite the rest of the script.
+What you're updating:
+1. NEW_TAXONOMY dict — The new risk taxonomy structure. Keys are L1 pillar names, values are lists of L2 pillar names nested under that L1.
+2. CROSSWALK_CONFIG dict — One entry per legacy pillar (14 total). Each entry maps a legacy L1 risk to the new taxonomy using this structure:
+python"Legacy Pillar Name": {
+    "mapping_type": "<type>",      # one of: direct, broader, split, overlay
+    "target_l2": "Single L2",      # use for direct or broader (single target)
+    "target_l2s": ["L2-A", "L2-B"], # use for split or overlay (multiple targets)
+    "notes": "any context",
+}
+Mapping type rules:
+
+"direct" → 1:1 mapping to a single L2. Use target_l2.
+"broader" → conceptually wider but still maps to one L2. Use target_l2.
+"split" → 1:many, requires keyword matching on rationale text to pick the right L2. Use target_l2s with all candidate L2s.
+"overlay" → amplifier risk (e.g., Country Risk). Does not create its own row. Flags target L2s. Use target_l2s.
+
+If a legacy pillar says "multiple depending on impact" or similar, that's an overlay.
+If it lists multiple L2s separated by semicolons, that's a split (unless guidance says overlay/amplifier).
+3. KEYWORD_MAP dict — For every L2 that appears as a target in any "split" mapping, provide a list of lowercase keywords/phrases that would appear in legacy free-text rationale indicating that L2 is the correct match. Use your judgment on likely audit rationale language. Include 8-15 keywords per L2. These are used for case-insensitive substring matching.
+Rules:
+
+L2 names must be spelled identically across all three dicts.
+Every L2 in NEW_TAXONOMY must exist in L2_TO_L1 (this is auto-derived, just keep names consistent).
+Every target_l2 or target_l2s value in CROSSWALK_CONFIG must match an L2 in NEW_TAXONOMY.
+Only L2s that are targets of "split" mappings need entries in KEYWORD_MAP, but you can include others for future use.
+
+Output format:
+Return three clearly labeled Python code blocks I can paste directly into the script, replacing the existing placeholder sections:
+
+NEW_TAXONOMY = { ... }
+CROSSWALK_CONFIG = { ... }
+KEYWORD_MAP = { ... }
+
+Do not include any other parts of the script. Do not add commentary between the code blocks — just the three blocks with a header label above each.
+
+MY CROSSWALK DATA:
+[PASTE YOUR 14 CROSSWALK ROWS HERE]
+Format — for each of the 14 legacy pillars, provide:
+
+Legacy L1 pillar name
+Mapping type (from column B: direct, 1:1, broader, split, no direct 1:1, overlay, etc.)
+New primary L1 (column C)
+Recommended new L2 mapping(s) (column D — semicolon-separated if multiple)
+Notes (if any)
+
+Example format:
+1. Credit Risk | Direct/1:1 | Financial Risk | Credit Risk | straightforward mapping
+2. Technology Risk | Split | Operational Risk | Technology & Cyber; Data Management | depends on whether rationale mentions cyber vs data topics
+3. Country Risk | Overlay/multiple depending on impact | Multiple | Regulatory Compliance; Financial Crimes; Geopolitical; Credit Risk | amplifier, not a standalone pillar
+Also provide:
+
+The complete new taxonomy: all 6 L1 pillar names and all 23 L2 pillar names, grouped by L1.
