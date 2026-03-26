@@ -2,14 +2,26 @@
 Risk Taxonomy Transformer
 =========================
 Transforms legacy 14-pillar risk taxonomy into new 6 L1 / 23 L2 taxonomy.
-Handles: deterministic mapping, 1:many resolution, keyword-based rationale
-classification, overlay/amplifier risks, and rating decomposition.
+Handles: LLM override file, sub-risk description lookup, deterministic mapping,
+1:many keyword resolution, overlay/amplifier risks, and rating decomposition.
+
+Resolution order for split mappings:
+  Override — LLM-classified overrides from Review Queue (highest priority)
+  Tier 0  — Sub-risk descriptions (deterministic)
+  Tier 1  — Keyword matching on pillar rationale text
+  Tier 2  — Default to first L2, flagged for review
+
+Workflow:
+  1. Run script without overrides → produces Review Queue
+  2. Batch Review Queue through LLM prompt → produces override file
+  3. Re-run script with override file → overrides replace low-confidence mappings
 
 SETUP:
 1. Fill in CROSSWALK_CONFIG with your actual mappings (Section 1)
 2. Update KEYWORD_MAP with rationale keywords per L2 (Section 1)
-3. Set file paths in main() (Section 6)
+3. Set file paths in main() (Section 6), including SUB_RISK_PATH
 4. Run: python risk_taxonomy_transformer.py
+5. (Optional) Batch Review Queue through LLM, save as overrides, re-run
 """
 
 import pandas as pd
@@ -312,10 +324,128 @@ def ingest_crosswalk(filepath: str = None) -> dict:
     if filepath:
         log.info(f"Reading crosswalk from {filepath}")
         xw = pd.read_excel(filepath)
-        # TODO: If you later want to load from file, parse columns here
-        # and build a dict matching CROSSWALK_CONFIG structure.
         log.warning("  File-based crosswalk parsing not yet implemented; using hardcoded config")
     return CROSSWALK_CONFIG
+
+
+def ingest_sub_risks(filepath: str, entity_id_col: str, legacy_l1_col: str,
+                     risk_desc_col: str, risk_id_col: str = None,
+                     rating_col: str = None) -> pd.DataFrame:
+    """Read sub-risk descriptions file.
+
+    Expected columns (configure names in main()):
+      - entity_id_col:  Audit Entity ID
+      - risk_id_col:    Risk ID (optional, for traceability)
+      - risk_desc_col:  Risk description text
+      - legacy_l1_col:  Legacy L1 pillar(s), tab-separated if multiple
+      - rating_col:     Inherent risk rating (optional, not used for scoring)
+
+    Returns DataFrame with one row per sub-risk, with legacy L1s exploded
+    so each row maps to a single L1.
+    """
+    log.info(f"Reading sub-risk descriptions from {filepath}")
+    df = pd.read_excel(filepath)
+    df.columns = [c.strip() for c in df.columns]
+    log.info(f"  Loaded {len(df)} sub-risk rows")
+
+    # Rename to standard internal names
+    col_map = {entity_id_col: "entity_id", risk_desc_col: "risk_description",
+               legacy_l1_col: "legacy_l1_raw"}
+    if risk_id_col:
+        col_map[risk_id_col] = "risk_id"
+    if rating_col:
+        col_map[rating_col] = "sub_risk_rating"
+    df = df.rename(columns=col_map)
+
+    # Ensure entity_id is string
+    df["entity_id"] = df["entity_id"].astype(str).str.strip()
+
+    # Explode tab-separated L1 pillars so each row has one L1
+    df["legacy_l1_list"] = df["legacy_l1_raw"].astype(str).str.split("\t")
+    df = df.explode("legacy_l1_list")
+    df["legacy_l1"] = df["legacy_l1_list"].str.strip()
+    df = df.drop(columns=["legacy_l1_list"])
+
+    # Clean up description text
+    df["risk_description"] = df["risk_description"].astype(str).str.strip()
+
+    log.info(f"  After L1 explosion: {len(df)} sub-risk-to-L1 rows")
+    log.info(f"  Unique entities with sub-risks: {df['entity_id'].nunique()}")
+
+    return df
+
+
+def build_sub_risk_index(sub_risks_df: pd.DataFrame) -> dict:
+    """Build lookup: {entity_id: {legacy_pillar: [list of risk descriptions]}}.
+
+    This enables fast lookup during entity transformation.
+    """
+    index = {}
+    for _, row in sub_risks_df.iterrows():
+        eid = row["entity_id"]
+        l1 = row["legacy_l1"]
+        desc = row["risk_description"]
+        if eid not in index:
+            index[eid] = {}
+        if l1 not in index[eid]:
+            index[eid][l1] = []
+        index[eid][l1].append(desc)
+    return index
+
+
+def load_overrides(filepath: str) -> dict:
+    """Load LLM-classified overrides from Excel/CSV.
+
+    Expected columns:
+      - entity_id:        Audit entity identifier
+      - source_legacy_pillar: Legacy pillar name (must match CROSSWALK_CONFIG keys)
+      - classified_l2:    The LLM-assigned L2 risk name (must match NEW_TAXONOMY)
+      - llm_confidence:   Optional — High/Medium/Low from the LLM
+
+    Returns dict: {(entity_id, legacy_pillar): {"l2": str, "confidence": str}}
+    """
+    log.info(f"Loading LLM overrides from {filepath}")
+
+    if filepath.endswith(".csv"):
+        df = pd.read_csv(filepath)
+    else:
+        df = pd.read_excel(filepath)
+
+    df.columns = [c.strip() for c in df.columns]
+    df["entity_id"] = df["entity_id"].astype(str).str.strip()
+    df["source_legacy_pillar"] = df["source_legacy_pillar"].astype(str).str.strip()
+    df["classified_l2"] = df["classified_l2"].astype(str).str.strip()
+
+    overrides = {}
+    validated = 0
+    skipped = 0
+
+    for _, row in df.iterrows():
+        l2 = row["classified_l2"]
+        if l2 not in L2_TO_L1:
+            log.warning(f"  Override skipped: '{l2}' not in taxonomy "
+                        f"(entity={row['entity_id']}, pillar={row['source_legacy_pillar']})")
+            skipped += 1
+            continue
+
+        key = (row["entity_id"], row["source_legacy_pillar"])
+        conf = str(row.get("llm_confidence", "high")).strip().lower()
+        if conf not in ("high", "medium", "low"):
+            conf = "high"
+
+        overrides[key] = {"l2": l2, "confidence": conf}
+        validated += 1
+
+    log.info(f"  Loaded {validated} valid overrides, skipped {skipped} invalid")
+    return overrides
+
+
+def build_override_index(overrides: dict) -> dict:
+    """Passthrough — overrides are already indexed by (entity_id, pillar).
+
+    Kept as a separate function for consistency with other index builders.
+    """
+    return overrides
 
 
 # =============================================================================
@@ -409,30 +539,100 @@ def score_rationale_against_keywords(rationale: str, target_l2s: list[str]) -> d
     return scores
 
 
+def resolve_via_sub_risks(
+    entity_id: str,
+    legacy_pillar: str,
+    target_l2s: list[str],
+    sub_risk_index: dict,
+) -> tuple[str | None, str, str, list[str]]:
+    """Tier 0: Resolve split mapping using sub-risk descriptions.
+
+    Scores each sub-risk description against keyword sets for candidate L2s.
+    A single sub-risk can evidence multiple L2s simultaneously.
+
+    Returns (selected_l2, confidence, method, matched_descriptions).
+    Returns (None, ...) if sub-risks don't resolve it.
+    """
+    entity_subs = sub_risk_index.get(entity_id, {})
+    descriptions = entity_subs.get(legacy_pillar, [])
+
+    if not descriptions:
+        return None, "", "", []
+
+    # Score each description against all candidate L2s
+    l2_scores = {l2: 0 for l2 in target_l2s}
+    l2_evidence = {l2: [] for l2 in target_l2s}
+
+    for desc in descriptions:
+        desc_lower = desc.lower()
+        for l2 in target_l2s:
+            keywords = KEYWORD_MAP.get(l2, [])
+            hits = sum(1 for kw in keywords if kw.lower() in desc_lower)
+            if hits > 0:
+                l2_scores[l2] += hits
+                l2_evidence[l2].append(desc[:100])  # truncate for logging
+
+    max_score = max(l2_scores.values())
+    if max_score == 0:
+        return None, "", "", []
+
+    top_l2s = [l2 for l2, s in l2_scores.items() if s == max_score]
+    matched_descs = []
+    for l2 in top_l2s:
+        matched_descs.extend(l2_evidence[l2])
+
+    if len(top_l2s) == 1:
+        confidence = "high" if max_score >= 3 else "medium"
+        return top_l2s[0], confidence, "sub_risk_lookup", matched_descs
+    else:
+        # Multiple L2s scored — pick highest, but this is actually useful info:
+        # it means the entity has sub-risks spanning multiple L2s.
+        # Return the top one; the others will still get gap-filled or caught
+        # by the rationale keyword fallback for other legacy pillars.
+        return top_l2s[0], "medium", "sub_risk_tie", matched_descs
+
+
 def resolve_split_mapping(
     legacy_pillar: str,
     rationale: str,
-    target_l2s: list[str]
-) -> tuple[str, str, str]:
-    """Resolve a 1:many mapping using keyword scoring.
+    target_l2s: list[str],
+    entity_id: str = None,
+    sub_risk_index: dict = None,
+    overrides: dict = None,
+) -> tuple[str, str, str, list[str]]:
+    """Resolve a 1:many mapping. Checks Override first, then Tier 0 (sub-risks),
+    then falls back to Tier 1 (keyword matching on rationale).
 
-    Returns (selected_l2, confidence, method).
+    Returns (selected_l2, confidence, method, sub_risk_evidence).
     """
+    # Override: LLM-classified result from previous run
+    if overrides and entity_id:
+        key = (entity_id, legacy_pillar)
+        if key in overrides:
+            ovr = overrides[key]
+            return ovr["l2"], ovr["confidence"], "llm_override", []
+
+    # Tier 0: Sub-risk descriptions
+    if sub_risk_index and entity_id:
+        result_l2, conf, method, evidence = resolve_via_sub_risks(
+            entity_id, legacy_pillar, target_l2s, sub_risk_index
+        )
+        if result_l2:
+            return result_l2, conf, method, evidence
+
+    # Tier 1: Keyword matching on rationale text
     scores = score_rationale_against_keywords(rationale, target_l2s)
     max_score = max(scores.values()) if scores else 0
 
     if max_score == 0:
-        # No keywords matched — default to first L2, flag for review
-        return target_l2s[0], "low", "default_first_l2"
+        return target_l2s[0], "low", "default_first_l2", []
 
-    # Check for ties
     top_l2s = [l2 for l2, s in scores.items() if s == max_score]
     if len(top_l2s) == 1:
         confidence = "high" if max_score >= 3 else "medium"
-        return top_l2s[0], confidence, "keyword_match"
+        return top_l2s[0], confidence, "keyword_match", []
     else:
-        # Tie — pick first by crosswalk order, flag for review
-        return top_l2s[0], "low", "keyword_tie"
+        return top_l2s[0], "low", "keyword_tie", []
 
 
 def transform_entity(
@@ -440,6 +640,8 @@ def transform_entity(
     entity_row: pd.Series,
     crosswalk: dict,
     pillar_columns: dict,
+    sub_risk_index: dict = None,
+    overrides: dict = None,
 ) -> tuple[list[dict], list[dict]]:
     """Transform one audit entity from legacy to new taxonomy.
 
@@ -447,21 +649,12 @@ def transform_entity(
         entity_id: The audit entity identifier (e.g., "AE-7")
         entity_row: The full row from the legacy DataFrame
         crosswalk: The CROSSWALK_CONFIG dict
-        pillar_columns: Dict mapping legacy pillar name to its column names:
-            {
-                "Credit Risk": {
-                    "rating": "Credit Risk - Inherent Risk Rating",
-                    "rationale": "Credit Risk - Rationale",
-                    "control": "Credit Risk - Control Assessment",
-                    "control_rationale": "Credit Risk - Control Rationale",
-                },
-                ...
-            }
+        pillar_columns: Dict mapping legacy pillar name to its column names
+        sub_risk_index: Optional dict from build_sub_risk_index()
+        overrides: Optional dict from load_overrides()
 
     Returns:
         (transformed_rows, overlay_flags)
-        - transformed_rows: list of dicts, one per new L2 risk
-        - overlay_flags: list of dicts for overlay risk annotations
     """
     transformed = []
     overlays = []
@@ -518,10 +711,13 @@ def transform_entity(
             selected_l2 = config["target_l2"]
             confidence = "high"
             method = mapping_type
+            sub_risk_evidence = []
 
         elif mapping_type == "split":
-            selected_l2, confidence, method = resolve_split_mapping(
-                legacy_pillar, str(rationale), config["target_l2s"]
+            selected_l2, confidence, method, sub_risk_evidence = resolve_split_mapping(
+                legacy_pillar, str(rationale), config["target_l2s"],
+                entity_id=entity_id, sub_risk_index=sub_risk_index,
+                overrides=overrides,
             )
         else:
             log.error(f"  Unknown mapping_type '{mapping_type}' for '{legacy_pillar}'")
@@ -555,6 +751,7 @@ def transform_entity(
             "confidence": confidence,
             "method": method,
             "dims_parsed_from_rationale": dims_were_parsed,
+            "sub_risk_evidence": "; ".join(sub_risk_evidence) if sub_risk_evidence else "",
             "needs_review": confidence == "low",
         }
         transformed.append(row)
@@ -589,7 +786,8 @@ def transform_entity(
                 "confidence": "none",
                 "method": "gap_fill",
                 "dims_parsed_from_rationale": False,
-                "needs_review": True,
+                "sub_risk_evidence": "",
+                "needs_review": False,  # structural gap, not an error
             })
 
     return transformed, overlays
@@ -604,6 +802,8 @@ def run_pipeline(
     crosswalk: dict,
     entity_id_col: str,
     pillar_columns: dict,
+    sub_risk_index: dict = None,
+    overrides: dict = None,
 ) -> tuple[pd.DataFrame, pd.DataFrame]:
     """Run the full transformation pipeline across all entities.
 
@@ -615,7 +815,11 @@ def run_pipeline(
     for idx, row in legacy_df.iterrows():
         entity_id = str(row[entity_id_col]).strip()
         log.info(f"Processing entity {entity_id} ({idx + 1}/{len(legacy_df)})")
-        transformed, overlays = transform_entity(entity_id, row, crosswalk, pillar_columns)
+        transformed, overlays = transform_entity(
+            entity_id, row, crosswalk, pillar_columns,
+            sub_risk_index=sub_risk_index,
+            overrides=overrides,
+        )
         all_transformed.extend(transformed)
         all_overlays.extend(overlays)
 
@@ -637,6 +841,10 @@ def run_pipeline(
     log.info(f"  Medium confidence: {med_conf} ({med_conf/total*100:.1f}%)")
     log.info(f"  Low confidence / needs review: {low_conf} ({low_conf/total*100:.1f}%)")
     log.info(f"  Gap fills (no legacy source): {gaps}")
+    sub_risk_resolved = (transformed_df["method"].isin(["sub_risk_lookup", "sub_risk_tie"])).sum()
+    llm_overrides = (transformed_df["method"] == "llm_override").sum()
+    log.info(f"  Resolved via LLM overrides: {llm_overrides}")
+    log.info(f"  Resolved via sub-risk descriptions: {sub_risk_resolved}")
     log.info(f"  Overlay flags: {len(overlays_df)}")
     log.info(f"  Flagged for review: {needs_review}")
     log.info("=" * 60)
@@ -736,7 +944,7 @@ def export_results(
         "source_legacy_pillar", "source_risk_rating_raw", "source_rationale",
         "source_control_raw", "source_control_rationale",
         "mapping_type", "confidence", "method",
-        "dims_parsed_from_rationale", "needs_review",
+        "dims_parsed_from_rationale", "sub_risk_evidence", "needs_review",
         "overlay_flag", "overlay_source", "overlay_rating", "overlay_rationale",
     ]
     available_trace_cols = [c for c in trace_cols if c in transformed_df.columns]
@@ -816,6 +1024,22 @@ def main():
     OUTPUT_PATH = "transformed_risk_taxonomy.xlsx"
     ENTITY_ID_COL = "Entity ID"                       # Column name for audit entity ID
 
+    # Sub-risk descriptions file (optional but recommended for split accuracy)
+    # Set to None to skip sub-risk lookup and use keyword matching only.
+    SUB_RISK_PATH = "sub_risk_descriptions.xlsx"      # Your sub-risk file
+    SUB_RISK_COLS = {
+        "entity_id": "Audit Entity ID",     # Column: audit entity identifier
+        "risk_id": "Risk ID",               # Column: risk ID (optional, for traceability)
+        "risk_desc": "Risk Description",    # Column: free-text risk description
+        "legacy_l1": "L1 Risk Pillars",     # Column: legacy L1 pillar(s), tab-separated
+        "rating": "Inherent Risk Rating",   # Column: rating (optional, not used for scoring)
+    }
+
+    # LLM Override file (optional — produced by batching Review Queue through LLM)
+    # Set to None on first run. After LLM classification, point to the output file.
+    # Expected columns: entity_id, source_legacy_pillar, classified_l2, llm_confidence
+    OVERRIDE_PATH = None  # e.g., "llm_overrides.xlsx" or "llm_overrides.csv"
+
     # Map each legacy pillar to its column names in the Excel file.
     # Adjust these to match your actual column headers.
     # Format: "Legacy Pillar Name": {
@@ -862,8 +1086,30 @@ def main():
     crosswalk = ingest_crosswalk(CROSSWALK_PATH)
     legacy_df = ingest_legacy_data(LEGACY_DATA_PATH)
 
+    # Load sub-risk descriptions if configured
+    sub_risk_index = None
+    if SUB_RISK_PATH:
+        sub_risks_df = ingest_sub_risks(
+            SUB_RISK_PATH,
+            entity_id_col=SUB_RISK_COLS["entity_id"],
+            legacy_l1_col=SUB_RISK_COLS["legacy_l1"],
+            risk_desc_col=SUB_RISK_COLS["risk_desc"],
+            risk_id_col=SUB_RISK_COLS.get("risk_id"),
+            rating_col=SUB_RISK_COLS.get("rating"),
+        )
+        sub_risk_index = build_sub_risk_index(sub_risks_df)
+        log.info(f"  Sub-risk index built: {len(sub_risk_index)} entities with sub-risks")
+
+    # Load LLM overrides if configured
+    overrides = None
+    if OVERRIDE_PATH:
+        overrides = load_overrides(OVERRIDE_PATH)
+        log.info(f"  Override index built: {len(overrides)} entity-pillar overrides")
+
     transformed_df, overlays_df = run_pipeline(
-        legacy_df, crosswalk, ENTITY_ID_COL, PILLAR_COLUMNS
+        legacy_df, crosswalk, ENTITY_ID_COL, PILLAR_COLUMNS,
+        sub_risk_index=sub_risk_index,
+        overrides=overrides,
     )
 
     transformed_df = apply_overlay_flags(transformed_df, overlays_df)
