@@ -1,0 +1,91 @@
+"""
+Enrich Review Queue for LLM Classification
+============================================
+Takes the Review Queue export and sub-risk descriptions file,
+joins ALL sub-risk descriptions per entity+pillar into a single column,
+then outputs a clean CSV ready to upload to ChatGPT.
+
+Usage:
+    python enrich_review_queue.py
+
+Configure the 4 paths/column names below, then run.
+"""
+
+import pandas as pd
+
+# ---- CONFIGURE THESE ----
+REVIEW_QUEUE_PATH = "review_queue.csv"          # Export from Review_Queue sheet (.csv or .xlsx)
+SUB_RISK_PATH = "sub_risk_descriptions.xlsx"    # Your sub-risk file
+OUTPUT_PATH = "review_queue_enriched.csv"        # Enriched CSV for LLM upload
+
+# Column names in the sub-risk file (must match your file exactly)
+SUB_RISK_ENTITY_COL = "Audit Entity ID"
+SUB_RISK_DESC_COL = "Risk Description"
+SUB_RISK_L1_COL = "L1 Risk Pillars"            # Tab-separated if multiple L1s
+# -------------------------
+
+# Load review queue
+if REVIEW_QUEUE_PATH.endswith(".csv"):
+    rq = pd.read_csv(REVIEW_QUEUE_PATH, dtype=str)
+else:
+    rq = pd.read_excel(REVIEW_QUEUE_PATH, dtype=str)
+rq.columns = [c.strip() for c in rq.columns]
+print(f"Review Queue: {len(rq)} rows")
+
+# Load sub-risks
+sr = pd.read_excel(SUB_RISK_PATH, dtype=str)
+sr.columns = [c.strip() for c in sr.columns]
+sr = sr.rename(columns={
+    SUB_RISK_ENTITY_COL: "entity_id",
+    SUB_RISK_DESC_COL: "risk_description",
+    SUB_RISK_L1_COL: "legacy_l1_raw",
+})
+sr["entity_id"] = sr["entity_id"].str.strip()
+sr["risk_description"] = sr["risk_description"].str.strip()
+
+# Explode tab-separated L1s so each row has one L1
+sr["legacy_l1_list"] = sr["legacy_l1_raw"].str.split("\t")
+sr = sr.explode("legacy_l1_list")
+sr["legacy_l1"] = sr["legacy_l1_list"].str.strip()
+print(f"Sub-risks (after L1 explosion): {len(sr)} rows")
+
+# Aggregate: concatenate all descriptions per entity + legacy pillar
+sr_agg = (
+    sr.groupby(["entity_id", "legacy_l1"])["risk_description"]
+    .apply(lambda x: " | ".join(x.dropna().unique()))
+    .reset_index()
+    .rename(columns={"risk_description": "all_sub_risk_descriptions", "legacy_l1": "source_legacy_pillar"})
+)
+print(f"Aggregated sub-risk groups: {len(sr_agg)}")
+
+# Ensure entity_id types match for join
+rq["entity_id"] = rq["entity_id"].astype(str).str.strip()
+rq["source_legacy_pillar"] = rq["source_legacy_pillar"].astype(str).str.strip()
+
+# Join onto review queue
+enriched = rq.merge(
+    sr_agg,
+    on=["entity_id", "source_legacy_pillar"],
+    how="left",
+)
+enriched["all_sub_risk_descriptions"] = enriched["all_sub_risk_descriptions"].fillna("")
+
+# Keep only columns the LLM needs
+output_cols = [
+    "entity_id",
+    "source_legacy_pillar",
+    "source_rationale",
+    "all_sub_risk_descriptions",
+    "method",
+]
+# Only include columns that exist (in case source_rationale was named differently)
+available = [c for c in output_cols if c in enriched.columns]
+enriched_out = enriched[available]
+
+enriched_out.to_csv(OUTPUT_PATH, index=False)
+
+matched = (enriched["all_sub_risk_descriptions"] != "").sum()
+print(f"\nOutput: {OUTPUT_PATH}")
+print(f"  Total rows: {len(enriched_out)}")
+print(f"  Rows with sub-risk descriptions: {matched}")
+print(f"  Rows without: {len(enriched_out) - matched}")
