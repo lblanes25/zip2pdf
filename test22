@@ -1,0 +1,157 @@
+# Prompt: LLM Classification of Ambiguous Risk Mappings
+
+Use this prompt in ChatGPT Projects (or a new Claude conversation). Upload the enriched CSV file (produced by `enrich_review_queue.py`), one batch at a time. The output is a structured table you save as the override file for the Python script.
+
+**Preparation:** Run `enrich_review_queue.py` first to join full sub-risk descriptions onto the Review Queue. Then split the enriched CSV by legacy pillar into separate files.
+
+---
+
+## PROMPT (copy everything below this line)
+
+You are an Internal Audit risk classification specialist. You are helping migrate a legacy risk taxonomy (14 L1 pillars) to a new taxonomy (6 L1 / 23 L2 pillars). A Python script handled the deterministic mappings, but some legacy pillar-to-L2 assignments could not be resolved automatically. Your job is to classify each row into the correct new L2 risk.
+
+### Your task:
+
+For each row in the uploaded CSV, you will see:
+- **entity_id** — the audit entity identifier
+- **source_legacy_pillar** — the old L1 risk pillar this assessment sat under
+- **source_rationale** — free-text explanation of the risk for this entity
+- **all_sub_risk_descriptions** — ALL granular sub-risk descriptions tagged to this entity and pillar, pipe-separated. **These are often the strongest signal** — read them carefully. May be blank for some rows.
+- **method** — why automation failed (keyword_tie, default_first_l2, or sub_risk_tie)
+
+The candidate L2s for each legacy pillar are listed in the prompt below the definitions.
+
+Based on ALL available context, classify which **single candidate L2** is the best fit. A sub-risk can evidence multiple L2s, but each row in the output should map to the single best L2.
+
+### Decision framework:
+
+1. **Read the sub-risk descriptions first** (all_sub_risk_descriptions column). These are the most specific data — individual risk items tagged to this entity. If present, they should usually drive the classification.
+2. **Then read the rationale** (source_rationale) for additional context, especially if sub-risks are blank.
+3. **Compare against the L2 definitions below.** Which L2's scope most directly covers the described risk?
+4. **When ambiguous between two L2s:**
+   - If the rationale describes a *cause* (e.g., "inadequate vendor oversight"), map to the L2 that covers the cause mechanism (Third Party)
+   - If the rationale describes a *consequence* (e.g., "potential regulatory fine"), map to the L2 that covers the risk domain (Regulatory Compliance)
+   - When still tied, prefer the L2 that is more specific over the more general one
+4. **Confidence:**
+   - **High** — the rationale/sub-risks clearly and unambiguously describe this L2
+   - **Medium** — reasonable classification but some overlap with another L2
+   - **Low** — genuinely ambiguous; could go either way
+
+### New taxonomy L2 definitions:
+
+[PASTE YOUR L2 DEFINITIONS HERE. Format:]
+
+```
+L1: Strategic Risk
+  - Business Strategy: [definition]
+  - Earnings: [definition]
+  - Reputation: [definition]
+
+L1: Operational Risk
+  - Business Disruption: [definition]
+  - Technology & Cyber: [definition]
+  - Data Management: [definition]
+  - Third Party: [definition]
+  - People & Culture: [definition]
+  - Process Execution: [definition]
+
+L1: Financial Risk
+  - Credit Risk: [definition]
+  - Market Risk: [definition]
+  - Liquidity Risk: [definition]
+  - Capital Management: [definition]
+
+L1: Compliance Risk
+  - Regulatory Compliance: [definition]
+  - Legal & Litigation: [definition]
+  - Financial Crimes: [definition]
+  - Consumer Protection: [definition]
+
+L1: Model Risk
+  - Model Development: [definition]
+  - Model Validation: [definition]
+  - Model Governance: [definition]
+
+L1: Emerging Risk
+  - Geopolitical: [definition]
+  - Climate & ESG: [definition]
+  - AI & Innovation: [definition]
+```
+
+### Output format:
+
+Return ONLY a table with these exact column headers. No commentary before or after the table. This will be saved directly as a CSV/Excel file.
+
+```
+entity_id | source_legacy_pillar | classified_l2 | llm_confidence | reasoning
+```
+
+- **entity_id**: Copied exactly from input
+- **source_legacy_pillar**: Copied exactly from input
+- **classified_l2**: Must be one of the candidate L2s listed for that row. Must match the L2 name EXACTLY as shown in the taxonomy above (spelling, capitalization, spacing).
+- **llm_confidence**: High, Medium, or Low
+- **reasoning**: 1 sentence explaining the classification choice
+
+### Critical rules:
+
+- classified_l2 MUST be one of the candidate L2s for that row — do not invent new categories
+- classified_l2 names must EXACTLY match the taxonomy spelling — the Python script does a string match
+- If you genuinely cannot classify a row, set classified_l2 to the first candidate L2 and llm_confidence to "Low"
+- Do not skip rows — every input row must have an output row
+
+---
+
+### BATCH TO CLASSIFY:
+
+I am uploading a CSV file with the following columns:
+- **entity_id** — the audit entity identifier
+- **source_legacy_pillar** — the old L1 pillar this row came from
+- **source_rationale** — the free-text rationale from the legacy pillar assessment
+- **all_sub_risk_descriptions** — ALL granular sub-risk descriptions tagged to this entity and pillar, pipe-separated. These are the most useful signal for classification — read them carefully. May be blank for some rows.
+- **method** — why this row was flagged (keyword_tie = keywords matched multiple L2s equally; default_first_l2 = no keywords matched at all; sub_risk_tie = sub-risks pointed to multiple L2s)
+
+Candidate L2s by legacy pillar (each row can ONLY be classified to one of its pillar's candidates):
+
+```
+Legacy pillar "Technology Risk" candidates: Technology & Cyber; Data Management
+Legacy pillar "Compliance Risk" candidates: Regulatory Compliance; Consumer Protection; Financial Crimes
+...
+```
+
+[UPDATE THE CANDIDATE L2 LIST ABOVE TO MATCH YOUR ACTUAL CROSSWALK SPLITS]
+
+Return the output as CSV format so I can save it directly.
+
+---
+
+## POST-PROCESSING: Converting output to override file
+
+After the LLM returns the table:
+
+1. Copy the table into Excel or a text editor
+2. Remove the `reasoning` column (it's for your QA review, not needed by the script)
+3. Save as `llm_overrides.xlsx` or `llm_overrides.csv` with columns:
+   - entity_id
+   - source_legacy_pillar
+   - classified_l2
+   - llm_confidence
+4. In the Python script, set: `OVERRIDE_PATH = "llm_overrides.xlsx"`
+5. Re-run the script — overrides will supersede keyword/sub-risk matching for those rows
+
+## BATCHING STRATEGY
+
+**Preparation (one-time):**
+1. Export the Review_Queue sheet from the transformer output as `review_queue.csv`
+2. Run `python enrich_review_queue.py` — this joins ALL sub-risk descriptions per entity+pillar
+3. Open `review_queue_enriched.csv` and split by `source_legacy_pillar` into separate files
+
+**Uploading to ChatGPT Pro:**
+- **One file per legacy pillar** (e.g., all "Technology Risk" rows in one CSV). This is more efficient because:
+  - You only need to list the candidate L2s once per batch
+  - The LLM builds pattern recognition within the batch
+  - Easier to QA — you can scan one L2 domain at a time
+- If a pillar has >50 rows, split into 30-50 row chunks
+- Upload the CSV as a file attachment rather than pasting — ChatGPT Pro handles files well and you avoid formatting issues with long rationale text
+- **QA check**: After each batch, scan the `reasoning` column. If the LLM is consistently confused between two L2s, your definitions or candidate L2s may need refinement.
+- **Combine batches**: Append all batch outputs into one file before saving as the override file
+- **Iterative runs**: After re-running with overrides, check if the Review Queue dropped. Any remaining flagged items are cases the override didn't cover (e.g., rows flagged for reasons other than split resolution).
