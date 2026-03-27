@@ -1,0 +1,93 @@
+# Prompt: Evaluate and Expand Crosswalk Mappings
+
+Use this prompt in a new conversation. Paste your old L1 definitions, new L1/L2 definitions, and your current crosswalk. The output is a revised crosswalk that allows one-to-many mappings.
+
+---
+
+## PROMPT (copy everything below this line)
+
+You are an Internal Audit risk taxonomy expert. I am migrating from a legacy 14-pillar risk taxonomy to a new 6 L1 / 23 L2 taxonomy. I have a crosswalk that maps each old L1 to new L2s, but it currently forces each old L1 to map to only ONE new L2 per entity. This is wrong — a single old L1 can and should map to MULTIPLE new L2s simultaneously.
+
+### Your tasks:
+
+**Task 1 — Evaluate the current crosswalk for completeness:**
+- Are any old L1 → new L2 relationships missing?
+- Are there new L2s that should receive data from an old L1 but currently don't?
+- Are any mappings incorrect (old L1 mapped to a L2 that doesn't make sense)?
+- Which new L2s have NO plausible legacy source at all (true gap fills)?
+
+**Task 2 — Expand the crosswalk to support one-to-many:**
+For each old L1, identify ALL new L2s that should inherit some or all of its data. Classify each relationship as:
+
+- **primary** — This L2 is the strongest match. The old L1's rating and rationale directly describe this L2's scope. The entity should almost always be assessed on this L2 if they were assessed on the old L1.
+- **secondary** — This L2 overlaps with the old L1's scope. The old L1's rating should carry forward as a starting point, but teams may need to adjust. The old L1's rationale may partially describe this L2.
+- **conditional** — This L2 only applies if certain keywords or themes appear in the rationale or sub-risk descriptions. Provide the conditions (keywords, themes, or criteria) that would trigger this mapping.
+- **not applicable** — This L2 has no relationship to the old L1.
+
+**Task 3 — Identify true gap fills:**
+List the new L2s that genuinely have no legacy L1 source at all — no old pillar covered this concept. These are the ones that will require net-new assessment. For each, note whether any old L1 *partially* overlaps (even tangentially) or if it's entirely new.
+
+### Decision framework:
+
+1. Read the old L1 definition carefully. What risks does it cover?
+2. Read each new L2 definition. Does the old L1's scope overlap with this L2?
+3. Consider the rationale text that would typically be written for this old L1. Would that text ever describe risks that fall under this L2?
+4. Err on the side of including a secondary mapping over leaving a gap fill. A team can always mark an L2 as N/A, but a blank gap fill means they start from zero.
+
+### Output format:
+
+Return a table with these columns:
+
+```
+Old L1 | New L1 | New L2 | Relationship (primary/secondary/conditional) | Conditions (for conditional only) | Notes
+```
+
+Then separately list:
+- **True gap fills:** New L2s with no plausible legacy source
+- **Concerns:** Any mappings in the current crosswalk that seem wrong or questionable
+- **Recommendations:** Suggested changes to improve coverage
+
+Finally, provide an updated Python config dict I can paste into my script. The format has changed to support multiple L2s per old L1:
+
+```python
+CROSSWALK_CONFIG = {
+    "Old L1 Name": {
+        "mapping_type": "multi",  # new type: maps to multiple L2s
+        "targets": [
+            {"l2": "L2 Name", "relationship": "primary"},
+            {"l2": "Another L2", "relationship": "secondary"},
+            {"l2": "Third L2", "relationship": "conditional", "conditions": ["keyword1", "keyword2"]},
+        ],
+        "notes": "explanation",
+    },
+    # For overlays, keep the existing format:
+    "Country Risk": {
+        "mapping_type": "overlay",
+        "target_l2s": ["L2-A", "L2-B"],
+        "notes": "amplifier",
+    },
+}
+```
+
+For the "multi" type:
+- **primary** L2s: always get populated with the old L1's rating and rationale
+- **secondary** L2s: always get populated, but flagged as "secondary_mapping" for team review
+- **conditional** L2s: only get populated if the rationale or sub-risk descriptions contain any of the listed condition keywords
+
+---
+
+### MY OLD TAXONOMY (14 L1 pillars with definitions):
+
+[PASTE YOUR 14 OLD L1 PILLAR NAMES AND DEFINITIONS HERE]
+
+### MY NEW TAXONOMY (6 L1 / 23 L2 with definitions):
+
+[PASTE YOUR NEW L1 AND L2 NAMES AND DEFINITIONS HERE]
+
+### MY CURRENT CROSSWALK:
+
+[PASTE YOUR CURRENT CROSSWALK_CONFIG DICT HERE, or describe it in plain text:
+- Old L1 → mapping type → target L2(s)
+for each of the 14 pillars]
+
+---
