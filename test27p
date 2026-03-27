@@ -1,0 +1,70 @@
+# Prompt: Distinguish Evaluated-But-Unmatched from True Gap Fills
+
+Attach your current `risk_taxonomy_transformer.py` script. The LLM will update the multi-target block and gap fill loop.
+
+---
+
+## PROMPT (copy everything below this line)
+
+I need you to update my Python risk taxonomy transformation script. Specifically, I need to change how the multi-target mapping engine and the gap fill loop interact so that the output clearly distinguishes between different reasons a row might be blank.
+
+### The problem:
+
+Currently, when the multi-target engine evaluates candidate L2s for an entity, it only creates rows for L2s that have evidence (keyword hits). L2s that were evaluated but had zero hits get silently skipped. Then at the bottom of `transform_entity()`, the gap fill loop sees those L2s missing from `mapped_l2s` and creates blank rows with `method = "gap_fill"`.
+
+This means my gap fill rows are a mix of two completely different things:
+1. **Candidate L2s that were evaluated and had no evidence** — the engine tried, nothing matched
+2. **True gap fills** — L2s where no legacy pillar in the crosswalk maps to them at all (should be zero with my current crosswalk, but the code should still handle it)
+
+I can't tell them apart in the output.
+
+### What I need:
+
+**In the multi-target block (`mapping_type == "multi"`):**
+
+After scoring all candidate L2s, for each candidate that was evaluated but had zero keyword hits and was NOT added to `targets_to_create`:
+- Track it in a new set or list (e.g., `evaluated_no_match`)
+- After the `targets_to_create` loop, create explicit blank rows for these with:
+  - All rating columns = None
+  - `method = "evaluated_no_evidence"` 
+  - `confidence = "none"`
+  - `needs_review = False`
+  - `source_legacy_pillar` = the legacy pillar that was evaluated (important for traceability)
+- Add these L2s to `mapped_l2s` so the gap fill loop doesn't re-create them
+
+**In the gap fill loop at the bottom of `transform_entity()`:**
+
+This should now ONLY catch L2s where no legacy pillar maps to them at all. Change the method to `"true_gap_fill"` to make it distinct. With my current crosswalk this should produce zero rows, but keep the logic as a safety net.
+
+**In the summary stats in `run_pipeline()`:**
+
+Add counts for:
+- `evaluated_no_evidence` — candidate L2s that were checked but had no keyword hits
+- `true_gap_fill` — L2s with no legacy pillar mapping (should be zero)
+- Keep the existing `gap_fill` count but rename it or replace it with these two
+
+### The resulting output methods should be:
+
+| Method | Meaning | Has ratings? | Needs review? |
+|---|---|---|---|
+| `direct` / `broader` | 1:1 mapping | Yes | No |
+| `evidence_match (primary)` | Keywords matched, primary candidate | Yes | No |
+| `evidence_match (secondary)` | Keywords matched, secondary candidate | Yes | No |
+| `evidence_match (conditional)` | Keywords matched, conditional candidate | Yes | No |
+| `default_no_evidence` | Pillar was rated, no candidate L2s matched, defaulted to first primary | Yes (default) | Yes |
+| `llm_override` | LLM classified this row | Yes | No |
+| `evaluated_no_evidence` | Candidate L2 was checked but no keywords matched | No (blank) | No |
+| `source_not_applicable` | Legacy pillar was rated N/A | No (blank) | No |
+| `true_gap_fill` | No legacy pillar maps to this L2 at all | No (blank) | No |
+
+### Rules:
+- Only modify the `mapping_type == "multi"` block and the gap fill loop at the bottom of `transform_entity()`
+- Add summary stats in `run_pipeline()` 
+- Do not change any other parts of the script
+- Keep deduplication logic as-is — it should still work since `evaluated_no_evidence` rows have None ratings
+- The `evaluated_no_evidence` rows should still include `source_legacy_pillar` so I can trace which pillar was evaluated
+
+### Output:
+Return the complete updated `transform_entity()` function and the updated summary stats block from `run_pipeline()`. I will paste them into my script replacing the existing versions.
+
+---
