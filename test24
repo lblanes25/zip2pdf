@@ -788,44 +788,86 @@ def transform_entity(
             }]
 
         elif mapping_type == "multi":
+            # Evidence-based multi-target: score each candidate L2 against
+            # sub-risk descriptions and rationale keywords. Only populate
+            # L2s that have actual evidence. If none match, default to
+            # first primary and flag for review.
             targets_to_create = []
-            # Build combined text from rationale + sub-risk descriptions for conditional checks
+
+            # Build combined text from rationale + sub-risk descriptions
             combined_text = str(rationale).lower()
             entity_subs = (sub_risk_index or {}).get(entity_id, {})
             sub_descs = entity_subs.get(legacy_pillar, [])
             for desc in sub_descs:
                 combined_text += " " + desc.lower()
 
+            # Check for LLM overrides first
+            first_primary_l2 = None
             for target in config["targets"]:
-                rel = target["relationship"]
-                if rel == "primary":
-                    targets_to_create.append({
-                        "l2": target["l2"],
-                        "confidence": "high",
-                        "method": "primary_mapping",
-                        "sub_risk_evidence": [],
-                    })
-                elif rel == "secondary":
-                    targets_to_create.append({
-                        "l2": target["l2"],
-                        "confidence": "medium",
-                        "method": "secondary_mapping",
-                        "sub_risk_evidence": [],
-                    })
-                elif rel == "conditional":
-                    conditions = target.get("conditions", [])
-                    hits = [c for c in conditions if c.lower() in combined_text]
-                    if hits:
-                        targets_to_create.append({
-                            "l2": target["l2"],
-                            "confidence": "medium",
-                            "method": "conditional_match",
-                            "sub_risk_evidence": hits[:5],
-                        })
+                if target["relationship"] == "primary" and not first_primary_l2:
+                    first_primary_l2 = target["l2"]
 
+                # Check LLM override for this entity+pillar→L2
+                if overrides and entity_id:
+                    key = (entity_id, legacy_pillar)
+                    if key in overrides:
+                        ovr = overrides[key]
+                        if ovr["l2"] == target["l2"]:
+                            targets_to_create.append({
+                                "l2": target["l2"],
+                                "confidence": ovr["confidence"],
+                                "method": "llm_override",
+                                "sub_risk_evidence": [],
+                            })
+                            continue
+
+                # Score this L2 against combined text using KEYWORD_MAP
+                l2_name = target["l2"]
+                keywords = KEYWORD_MAP.get(l2_name, [])
+                hits = [kw for kw in keywords if kw.lower() in combined_text]
+                score = len(hits)
+
+                # Also check conditional-specific keywords if present
+                conditions = target.get("conditions", [])
+                condition_hits = [c for c in conditions if c.lower() in combined_text]
+                score += len(condition_hits)
+                all_evidence = (hits + condition_hits)[:8]
+
+                rel = target["relationship"]
+
+                if score > 0:
+                    # Evidence found — populate this L2
+                    if score >= 3:
+                        confidence = "high"
+                    elif score >= 1:
+                        confidence = "medium"
+                    method = f"evidence_match ({rel})"
+                    targets_to_create.append({
+                        "l2": l2_name,
+                        "confidence": confidence,
+                        "method": method,
+                        "sub_risk_evidence": all_evidence,
+                    })
+
+            # If no L2s had evidence, default to first primary and flag
             if not targets_to_create:
-                log.warning(f"  Entity {entity_id}: '{legacy_pillar}' multi mapping produced no targets")
-                continue
+                if first_primary_l2:
+                    targets_to_create.append({
+                        "l2": first_primary_l2,
+                        "confidence": "low",
+                        "method": "default_no_evidence",
+                        "sub_risk_evidence": [],
+                    })
+                    log.info(
+                        f"  Entity {entity_id}: '{legacy_pillar}' → no evidence for any L2, "
+                        f"defaulted to '{first_primary_l2}' — FLAGGED FOR REVIEW"
+                    )
+                else:
+                    log.warning(
+                        f"  Entity {entity_id}: '{legacy_pillar}' multi mapping "
+                        f"produced no targets and has no primary fallback"
+                    )
+                    continue
 
         elif mapping_type == "split":
             selected_l2, confidence, method, sub_risk_evidence = resolve_split_mapping(
@@ -994,17 +1036,15 @@ def run_pipeline(
     log.info(f"  Medium confidence: {med_conf} ({med_conf/total*100:.1f}%)")
     log.info(f"  Low confidence / needs review: {low_conf} ({low_conf/total*100:.1f}%)")
     log.info(f"  Gap fills (no legacy source): {gaps}")
-    sub_risk_resolved = (transformed_df["method"].isin(["sub_risk_lookup", "sub_risk_tie"])).sum()
-    llm_overrides = (transformed_df["method"] == "llm_override").sum()
-    primary_maps = transformed_df["method"].str.contains("primary_mapping", na=False).sum()
-    secondary_maps = transformed_df["method"].str.contains("secondary_mapping", na=False).sum()
-    conditional_maps = transformed_df["method"].str.contains("conditional_match", na=False).sum()
+    evidence_matches = transformed_df["method"].str.contains("evidence_match", na=False).sum()
+    evidence_high = (transformed_df["method"].str.contains("evidence_match", na=False) & (transformed_df["confidence"] == "high")).sum()
+    evidence_med = (transformed_df["method"].str.contains("evidence_match", na=False) & (transformed_df["confidence"] == "medium")).sum()
+    defaults_no_evidence = (transformed_df["method"] == "default_no_evidence").sum()
+    llm_overrides = transformed_df["method"].str.contains("llm_override", na=False).sum()
     dedup_count = transformed_df["method"].str.contains("dedup", na=False).sum()
+    log.info(f"  Evidence-based matches: {evidence_matches} (high: {evidence_high}, medium: {evidence_med})")
+    log.info(f"  Default no evidence (flagged for review): {defaults_no_evidence}")
     log.info(f"  Resolved via LLM overrides: {llm_overrides}")
-    log.info(f"  Resolved via sub-risk descriptions: {sub_risk_resolved}")
-    log.info(f"  Primary mappings (multi): {primary_maps}")
-    log.info(f"  Secondary mappings (multi): {secondary_maps}")
-    log.info(f"  Conditional matches (multi): {conditional_maps}")
     log.info(f"  Deduplicated (multiple sources → same L2): {dedup_count}")
     log.info(f"  Overlay flags: {len(overlays_df)}")
     log.info(f"  Flagged for review: {needs_review}")
