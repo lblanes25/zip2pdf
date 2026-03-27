@@ -1,0 +1,1420 @@
+"""
+Risk Taxonomy Transformer
+=========================
+Transforms legacy 14-pillar risk taxonomy into new 6 L1 / 23 L2 taxonomy.
+Handles: LLM override file, sub-risk description lookup, deterministic mapping,
+1:many keyword resolution, overlay/amplifier risks, and rating decomposition.
+
+Resolution order for split mappings:
+  Override — LLM-classified overrides from Review Queue (highest priority)
+  Tier 0  — Sub-risk descriptions (deterministic)
+  Tier 1  — Keyword matching on pillar rationale text
+  Tier 2  — Default to first L2, flagged for review
+
+Workflow:
+  1. Run script without overrides → produces Review Queue
+  2. Batch Review Queue through LLM prompt → produces override file
+  3. Re-run script with override file → overrides replace low-confidence mappings
+
+SETUP:
+1. Fill in CROSSWALK_CONFIG with your actual mappings (Section 1)
+2. Update KEYWORD_MAP with rationale keywords per L2 (Section 1)
+3. Set file paths in main() (Section 6), including SUB_RISK_PATH
+4. Run: python risk_taxonomy_transformer.py
+5. (Optional) Batch Review Queue through LLM, save as overrides, re-run
+"""
+
+import pandas as pd
+import re
+import logging
+from pathlib import Path
+from openpyxl import load_workbook
+from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[
+        logging.FileHandler("transform_log.txt", mode="w"),
+        logging.StreamHandler()
+    ]
+)
+log = logging.getLogger(__name__)
+
+# =============================================================================
+# SECTION 1: CONFIGURATION — FILL THESE IN
+# =============================================================================
+
+# -- Legacy rating maps --
+RISK_RATING_MAP = {
+    "low": 1, "medium": 2, "high": 3, "critical": 4,
+    "l": 1, "m": 2, "h": 3, "c": 4,
+    "1": 1, "2": 2, "3": 3, "4": 4,
+}
+
+CONTROL_RATING_MAP = {
+    "well controlled": 1,
+    "moderately controlled": 2,
+    "new/not tested yet": 3,
+    "not tested": 3,
+    "new": 3,
+    "insufficiently controlled": 4,
+    "not applicable": None,
+    "n/a": None,
+}
+
+# -- New taxonomy definition --
+# 5 L1s / 23 L2s based on actual AmEx risk taxonomy.
+NEW_TAXONOMY = {
+    "Strategic": [
+        "Earnings",
+        "Capital",
+    ],
+    "Liquidity": [
+        "Liquidity",
+    ],
+    "Reputational": [
+        "Reputation",
+    ],
+    "Market": [
+        "Interest Rate",
+        "FX and Price",
+    ],
+    "Credit": [
+        "Consumer and Small Business",
+        "Commercial",
+    ],
+    "Operational and Compliance": [
+        "Data",
+        "Fraud (External and Internal)",
+        "Information and Cyber Security",
+        "Technology",
+        "Processing, Execution and Change",
+        "Business Disruption",
+        "Human Capital",
+        "Financial Reporting",
+        "Third Party",
+        "Model",
+        "Conduct",
+        "Prudential & bank administration compliance",
+        "Customer / client protection and product compliance",
+        "Financial crimes",
+        "Privacy",
+    ],
+}
+
+# Flatten for validation
+ALL_L2_RISKS = []
+L2_TO_L1 = {}
+for l1, l2_list in NEW_TAXONOMY.items():
+    for l2 in l2_list:
+        ALL_L2_RISKS.append(l2)
+        L2_TO_L1[l2] = l1
+
+# -- Crosswalk config --
+# Each legacy pillar maps to one or more new L2s.
+#
+# mapping_type:
+#   "direct"    — 1:1 to a single L2
+#   "multi"     — 1:many, populates ALL targets (primary, secondary, conditional)
+#   "overlay"   — amplifier risk, flagged on target L2s
+#
+# For "multi" targets:
+#   "primary"     — always populated with legacy rating, high confidence
+#   "secondary"   — always populated, flagged for team review
+#   "conditional" — only populated if rationale/sub-risk keywords match
+#
+# When multiple old L1s map to the same L2, the higher (more conservative)
+# rating is kept and both sources are logged for traceability.
+
+CROSSWALK_CONFIG = {
+    "Credit": {
+        "mapping_type": "multi",
+        "targets": [
+            {"l2": "Consumer and Small Business", "relationship": "primary"},
+            {"l2": "Commercial", "relationship": "primary"},
+        ],
+        "notes": "Both populate; teams mark the non-applicable one N/A",
+    },
+    "Market": {
+        "mapping_type": "multi",
+        "targets": [
+            {"l2": "Interest Rate", "relationship": "primary"},
+            {"l2": "FX and Price", "relationship": "primary"},
+        ],
+        "notes": "Both populate; similarly assessed per VP",
+    },
+    "Strategic & Business": {
+        "mapping_type": "multi",
+        "targets": [
+            {"l2": "Earnings", "relationship": "primary"},
+            {"l2": "Capital", "relationship": "secondary"},
+        ],
+        "notes": "Capital has low applicability for most AEs",
+    },
+    "Funding and Liquidity": {
+        "mapping_type": "direct",
+        "target_l2": "Liquidity",
+        "notes": "Direct 1:1 mapping",
+    },
+    "Reputational": {
+        "mapping_type": "direct",
+        "target_l2": "Reputation",
+        "notes": "Direct 1:1 mapping",
+    },
+    "Model": {
+        "mapping_type": "direct",
+        "target_l2": "Model",
+        "notes": "Direct 1:1 mapping",
+    },
+    "Third Party": {
+        "mapping_type": "direct",
+        "target_l2": "Third Party",
+        "notes": "Direct 1:1 mapping",
+    },
+    "Financial Reporting": {
+        "mapping_type": "direct",
+        "target_l2": "Financial Reporting",
+        "notes": "Direct 1:1 mapping",
+    },
+    "External Fraud": {
+        "mapping_type": "direct",
+        "target_l2": "Fraud (External and Internal)",
+        "notes": "Direct 1:1 mapping",
+    },
+    "Information Technology": {
+        "mapping_type": "multi",
+        "targets": [
+            {"l2": "Technology", "relationship": "primary"},
+            {"l2": "Data", "relationship": "conditional",
+             "conditions": ["data governance", "data quality", "data management",
+                            "data lineage", "data lifecycle", "data usability"]},
+        ],
+        "notes": "Data only if rationale mentions data governance topics",
+    },
+    "Information Security": {
+        "mapping_type": "multi",
+        "targets": [
+            {"l2": "Information and Cyber Security", "relationship": "primary"},
+            {"l2": "Data", "relationship": "conditional",
+             "conditions": ["data protection", "data loss", "data breach",
+                            "data compliance", "PII", "personal data",
+                            "data privacy"]},
+        ],
+        "notes": "Data only if rationale mentions data protection/privacy",
+    },
+    "Operational": {
+        "mapping_type": "multi",
+        "targets": [
+            {"l2": "Processing, Execution and Change", "relationship": "primary"},
+            {"l2": "Business Disruption", "relationship": "primary"},
+            {"l2": "Human Capital", "relationship": "primary"},
+            {"l2": "Conduct", "relationship": "secondary"},
+            {"l2": "Privacy", "relationship": "secondary"},
+            {"l2": "Data", "relationship": "conditional",
+             "conditions": ["data risk", "data volume", "data depend",
+                            "data governance", "data quality", "data process"]},
+        ],
+        "notes": "Old operational covered operations/process, legal, privacy, people/conduct, data. Largest split.",
+    },
+    "Compliance": {
+        "mapping_type": "multi",
+        "targets": [
+            {"l2": "Prudential & bank administration compliance", "relationship": "primary"},
+            {"l2": "Customer / client protection and product compliance", "relationship": "primary"},
+            {"l2": "Financial crimes", "relationship": "primary"},
+            {"l2": "Conduct", "relationship": "secondary"},
+        ],
+        "notes": "Old compliance covered enterprise, consumer, fair lending, new products, global financial crimes",
+    },
+    "Country": {
+        "mapping_type": "overlay",
+        "target_l2s": [
+            "Prudential & bank administration compliance",
+            "Financial crimes",
+            "Consumer and Small Business",
+            "Commercial",
+        ],
+        "notes": "Amplifier — flags relevant L2s, does not create own row",
+    },
+}
+
+# -- Keyword map for conditional and split resolution --
+# Used for:
+#   1. "conditional" targets in multi mappings (checks rationale + sub-risks)
+#   2. Legacy "split" mappings (if any remain)
+#   3. Sub-risk description scoring (Tier 0)
+#
+# Keys must match L2 names exactly. Values are lists of keywords/phrases
+# found in legacy rationale text. Case-insensitive matching.
+KEYWORD_MAP = {
+    # Conditional target keywords — used to decide if a conditional L2 applies
+    "Data": [
+        "data governance", "data quality", "data management", "data lineage",
+        "data lifecycle", "data usability", "data risk", "data volume",
+        "data depend", "data process", "data protection", "data loss",
+        "data breach", "data compliance", "PII", "personal data",
+        "data privacy", "data classification", "record retention",
+    ],
+    # General L2 keywords — used for sub-risk description scoring
+    "Technology": [
+        "technology", "system", "IT ", "infrastructure", "processing",
+        "stability", "capacity", "performance", "information system",
+        "platform", "application", "software", "hardware", "network",
+    ],
+    "Information and Cyber Security": [
+        "cyber", "breach", "phishing", "intrusion", "vulnerab",
+        "ransomware", "infosec", "information security", "penetration",
+        "firewall", "endpoint", "malware", "DDoS", "unauthorized access",
+        "confidentiality", "integrity", "availability",
+    ],
+    "Processing, Execution and Change": [
+        "process", "execution", "change management", "control failure",
+        "error", "manual", "reconciliation", "settlement", "transaction",
+        "operational loss", "procedure", "safeguard",
+    ],
+    "Business Disruption": [
+        "business continuity", "BCP", "disaster recovery", "DR ",
+        "resilience", "outage", "disruption", "pandemic",
+        "crisis management", "incident", "hazard",
+    ],
+    "Human Capital": [
+        "talent", "retention", "hiring", "workforce", "culture",
+        "training", "succession", "employee", "human resource",
+        "HR ", "headcount", "attrition", "compensation", "benefits",
+        "workplace environment", "organizational structure",
+    ],
+    "Conduct": [
+        "conduct", "misconduct", "ethics", "code of conduct",
+        "blue box values", "integrity", "trust", "colleague",
+        "intentional", "unintentional", "responsibilities",
+    ],
+    "Privacy": [
+        "privacy", "personal data", "GDPR", "CCPA", "PII",
+        "data subject", "consent", "opt-out", "data processing",
+        "privacy law", "privacy regulation",
+    ],
+    "Prudential & bank administration compliance": [
+        "prudential", "bank admin", "governance", "oversight",
+        "regulatory commitment", "enterprise compliance",
+        "compliance program", "regulatory", "examination",
+    ],
+    "Customer / client protection and product compliance": [
+        "consumer", "fair lending", "UDAAP", "CRA", "disclosure",
+        "complaint", "customer harm", "fee", "servicing",
+        "product compliance", "new product", "client protection",
+    ],
+    "Financial crimes": [
+        "financial crime", "money laundering", "AML", "BSA",
+        "sanctions", "OFAC", "suspicious activity", "terrorism",
+        "corruption", "bribery", "KYC", "know your customer",
+    ],
+    "Fraud (External and Internal)": [
+        "fraud", "identity theft", "account takeover", "counterfeit",
+        "scheme", "defraud", "false pretenses", "embezzlement",
+        "internal fraud", "external fraud",
+    ],
+    "Financial Reporting": [
+        "financial report", "regulatory report", "10-K", "10-Q",
+        "SEC filing", "GAAP", "accounting", "material misstatement",
+        "restatement", "financial statement",
+    ],
+    "Third Party": [
+        "vendor", "third.party", "outsourc", "supplier",
+        "third party", "partner", "service provider",
+        "subcontract", "offshore",
+    ],
+    "Model": [
+        "model", "validation", "back-test", "backtest", "challenger",
+        "model risk", "algorithm", "methodology", "MRM",
+        "model governance", "model performance",
+    ],
+    "Earnings": [
+        "earnings", "revenue", "profitability", "margin",
+        "income", "NII", "fee income", "expense", "pricing",
+        "customer base", "product diversification",
+    ],
+    "Capital": [
+        "capital", "capital adequacy", "capital raising",
+        "capital allocation", "capital distribution",
+        "regulatory capital", "CCAR", "stress test",
+    ],
+    "Interest Rate": [
+        "interest rate", "repricing", "yield curve", "basis risk",
+        "options risk", "rate sensitivity", "NII",
+    ],
+    "FX and Price": [
+        "foreign exchange", "FX ", "currency", "price risk",
+        "market-making", "dealing", "position taking",
+        "equity market",
+    ],
+    "Consumer and Small Business": [
+        "consumer", "small business", "cardholder", "cardmember",
+        "retail", "personal", "individual",
+    ],
+    "Commercial": [
+        "commercial", "corporate", "counterpart", "institutional",
+        "wholesale", "large corporate",
+    ],
+    "Reputation": [
+        "reputation", "brand", "media coverage", "stakeholder",
+        "public perception", "trust",
+    ],
+    "Liquidity": [
+        "liquidity", "funding", "cash flow", "obligation",
+        "deposit", "borrowing",
+    ],
+}
+
+
+# =============================================================================
+# SECTION 2: INGESTION
+# =============================================================================
+
+def ingest_legacy_data(filepath: str) -> pd.DataFrame:
+    """Read the legacy entity-level risk data from Excel.
+
+    Expects a wide-format file: one row per audit entity with columns for
+    each legacy pillar's rating, rationale, control assessment, and control
+    rationale. Adjust column name patterns below to match your file.
+    """
+    log.info(f"Reading legacy data from {filepath}")
+    df = pd.read_excel(filepath)
+    log.info(f"  Loaded {len(df)} audit entities, {len(df.columns)} columns")
+
+    # Normalize column names: strip whitespace, lowercase
+    df.columns = [c.strip() for c in df.columns]
+    return df
+
+
+def ingest_crosswalk(filepath: str = None) -> dict:
+    """Return the crosswalk config.
+
+    If a filepath is provided, reads from Excel and builds the config dict.
+    Otherwise returns the hardcoded CROSSWALK_CONFIG above.
+    """
+    if filepath:
+        log.info(f"Reading crosswalk from {filepath}")
+        xw = pd.read_excel(filepath)
+        log.warning("  File-based crosswalk parsing not yet implemented; using hardcoded config")
+    return CROSSWALK_CONFIG
+
+
+def ingest_sub_risks(filepath: str, entity_id_col: str, legacy_l1_col: str,
+                     risk_desc_col: str, risk_id_col: str = None,
+                     rating_col: str = None) -> pd.DataFrame:
+    """Read sub-risk descriptions file.
+
+    Expected columns (configure names in main()):
+      - entity_id_col:  Audit Entity ID
+      - risk_id_col:    Risk ID (optional, for traceability)
+      - risk_desc_col:  Risk description text
+      - legacy_l1_col:  Legacy L1 pillar(s), tab-separated if multiple
+      - rating_col:     Inherent risk rating (optional, not used for scoring)
+
+    Returns DataFrame with one row per sub-risk, with legacy L1s exploded
+    so each row maps to a single L1.
+    """
+    log.info(f"Reading sub-risk descriptions from {filepath}")
+    df = pd.read_excel(filepath)
+    df.columns = [c.strip() for c in df.columns]
+    log.info(f"  Loaded {len(df)} sub-risk rows")
+
+    # Rename to standard internal names
+    col_map = {entity_id_col: "entity_id", risk_desc_col: "risk_description",
+               legacy_l1_col: "legacy_l1_raw"}
+    if risk_id_col:
+        col_map[risk_id_col] = "risk_id"
+    if rating_col:
+        col_map[rating_col] = "sub_risk_rating"
+    df = df.rename(columns=col_map)
+
+    # Ensure entity_id is string
+    df["entity_id"] = df["entity_id"].astype(str).str.strip()
+
+    # Explode tab-separated L1 pillars so each row has one L1
+    df["legacy_l1_list"] = df["legacy_l1_raw"].astype(str).str.split("\t")
+    df = df.explode("legacy_l1_list")
+    df["legacy_l1"] = df["legacy_l1_list"].str.strip()
+    df = df.drop(columns=["legacy_l1_list"])
+
+    # Clean up description text
+    df["risk_description"] = df["risk_description"].astype(str).str.strip()
+
+    log.info(f"  After L1 explosion: {len(df)} sub-risk-to-L1 rows")
+    log.info(f"  Unique entities with sub-risks: {df['entity_id'].nunique()}")
+
+    return df
+
+
+def build_sub_risk_index(sub_risks_df: pd.DataFrame) -> dict:
+    """Build lookup: {entity_id: {legacy_pillar: [list of risk descriptions]}}.
+
+    This enables fast lookup during entity transformation.
+    """
+    index = {}
+    for _, row in sub_risks_df.iterrows():
+        eid = row["entity_id"]
+        l1 = row["legacy_l1"]
+        desc = row["risk_description"]
+        if eid not in index:
+            index[eid] = {}
+        if l1 not in index[eid]:
+            index[eid][l1] = []
+        index[eid][l1].append(desc)
+    return index
+
+
+def load_overrides(filepath: str) -> dict:
+    """Load LLM-classified overrides from Excel/CSV.
+
+    Expected columns:
+      - entity_id:        Audit entity identifier
+      - source_legacy_pillar: Legacy pillar name (must match CROSSWALK_CONFIG keys)
+      - classified_l2:    The LLM-assigned L2 risk name (must match NEW_TAXONOMY)
+      - llm_confidence:   Optional — High/Medium/Low from the LLM
+
+    Returns dict: {(entity_id, legacy_pillar): {"l2": str, "confidence": str}}
+    """
+    log.info(f"Loading LLM overrides from {filepath}")
+
+    if filepath.endswith(".csv"):
+        df = pd.read_csv(filepath)
+    else:
+        df = pd.read_excel(filepath)
+
+    df.columns = [c.strip() for c in df.columns]
+    df["entity_id"] = df["entity_id"].astype(str).str.strip()
+    df["source_legacy_pillar"] = df["source_legacy_pillar"].astype(str).str.strip()
+    df["classified_l2"] = df["classified_l2"].astype(str).str.strip()
+
+    overrides = {}
+    validated = 0
+    skipped = 0
+
+    for _, row in df.iterrows():
+        l2 = row["classified_l2"]
+        if l2 not in L2_TO_L1:
+            log.warning(f"  Override skipped: '{l2}' not in taxonomy "
+                        f"(entity={row['entity_id']}, pillar={row['source_legacy_pillar']})")
+            skipped += 1
+            continue
+
+        key = (row["entity_id"], row["source_legacy_pillar"])
+        conf = str(row.get("llm_confidence", "high")).strip().lower()
+        if conf not in ("high", "medium", "low"):
+            conf = "high"
+
+        overrides[key] = {"l2": l2, "confidence": conf}
+        validated += 1
+
+    log.info(f"  Loaded {validated} valid overrides, skipped {skipped} invalid")
+    return overrides
+
+
+def build_override_index(overrides: dict) -> dict:
+    """Passthrough — overrides are already indexed by (entity_id, pillar).
+
+    Kept as a separate function for consistency with other index builders.
+    """
+    return overrides
+
+
+# =============================================================================
+# SECTION 3: RATING CONVERSION & RATIONALE PARSING
+# =============================================================================
+
+def convert_risk_rating(value) -> int | None:
+    """Convert legacy risk rating to 1-4 numeric scale."""
+    if pd.isna(value):
+        return None
+    return RISK_RATING_MAP.get(str(value).strip().lower())
+
+
+def convert_control_rating(value) -> int | None:
+    """Convert legacy control assessment to 1-4 numeric scale."""
+    if pd.isna(value):
+        return None
+    return CONTROL_RATING_MAP.get(str(value).strip().lower())
+
+
+def parse_rationale_for_dimensions(rationale: str) -> dict:
+    """Extract explicit likelihood/impact mentions from rationale text.
+
+    Handles many free-text formats:
+      "likelihood is high"           "impact: medium"
+      "likelihood(high)"             "impact (medium)"
+      "the likelihood is medium"     "impact is high because..."
+      "L: Low, I: High"             "high likelihood"
+      "likelihood - low"             "likelihood = critical"
+      "likelihood rating: high"      "impact rating is medium"
+
+    Returns dict with any found dimensions; empty dict if none found.
+    """
+    if not rationale or pd.isna(rationale):
+        return {}
+
+    text = str(rationale).lower()
+    found = {}
+    rating_words = "low|medium|high|critical"
+
+    for dimension in ["likelihood", "impact"]:
+        # Pattern 1: "dimension <separator> rating"
+        # Handles: is, :, -, =, (, and optional words like "is rated", "rating:"
+        match = re.search(
+            rf"{dimension}\s*(?:rating\s*)?(?:is\s*(?:rated\s*)?|:|–|-|=|\()\s*({rating_words})",
+            text
+        )
+        if match:
+            found[dimension] = RISK_RATING_MAP.get(match.group(1))
+            continue
+
+        # Pattern 2: "the dimension ... is/of rating" (words in between, up to 5)
+        match = re.search(
+            rf"(?:the\s+)?{dimension}\s+(?:\w+\s+){{0,5}}(?:is|of)\s+({rating_words})",
+            text
+        )
+        if match:
+            found[dimension] = RISK_RATING_MAP.get(match.group(1))
+            continue
+
+        # Pattern 3: "rating dimension" (e.g., "high likelihood")
+        match = re.search(
+            rf"({rating_words})\s+{dimension}",
+            text
+        )
+        if match:
+            found[dimension] = RISK_RATING_MAP.get(match.group(1))
+
+    # Abbreviation patterns: "L: Low" / "I: High" / "L-Low, I-Medium"
+    abbrev_match = re.search(
+        rf"\bL\s*[:\-=]\s*({rating_words})", text
+    )
+    if abbrev_match and "likelihood" not in found:
+        found["likelihood"] = RISK_RATING_MAP.get(abbrev_match.group(1))
+
+    abbrev_match = re.search(
+        rf"\bI\s*[:\-=]\s*({rating_words})", text
+    )
+    if abbrev_match and "impact" not in found:
+        found["impact"] = RISK_RATING_MAP.get(abbrev_match.group(1))
+
+    # Specific impact types: financial, reputational, regulatory, consumer
+    for impact_type in ["financial", "reputational", "regulatory", "consumer"]:
+        # "financial impact <sep> rating" or "impact <sep> financial <sep> rating"
+        match = re.search(
+            rf"{impact_type}\s+impact\s*(?:rating\s*)?(?:is\s*(?:rated\s*)?|:|–|-|=|\()?\s*({rating_words})",
+            text
+        )
+        if match:
+            found[f"impact_{impact_type}"] = RISK_RATING_MAP.get(match.group(1))
+            continue
+
+        # "rating financial impact"
+        match = re.search(
+            rf"({rating_words})\s+{impact_type}\s+impact",
+            text
+        )
+        if match:
+            found[f"impact_{impact_type}"] = RISK_RATING_MAP.get(match.group(1))
+            continue
+
+        # "impact - financial: rating" or "impact (financial): rating"
+        match = re.search(
+            rf"impact\s*[\-\(]\s*{impact_type}\s*[\)\:]?\s*(?:is\s*)?({rating_words})",
+            text
+        )
+        if match:
+            found[f"impact_{impact_type}"] = RISK_RATING_MAP.get(match.group(1))
+
+    return found
+
+
+# =============================================================================
+# SECTION 4: MAPPING ENGINE
+# =============================================================================
+
+def score_rationale_against_keywords(rationale: str, target_l2s: list[str]) -> dict:
+    """Score rationale text against keyword sets for candidate L2s.
+
+    Returns dict of {l2_name: score}. Higher = better match.
+    """
+    if not rationale or pd.isna(rationale):
+        return {l2: 0 for l2 in target_l2s}
+
+    text = str(rationale).lower()
+    scores = {}
+    for l2 in target_l2s:
+        keywords = KEYWORD_MAP.get(l2, [])
+        score = 0
+        for kw in keywords:
+            if kw.lower() in text:
+                score += 1
+        scores[l2] = score
+    return scores
+
+
+def resolve_via_sub_risks(
+    entity_id: str,
+    legacy_pillar: str,
+    target_l2s: list[str],
+    sub_risk_index: dict,
+) -> tuple[str | None, str, str, list[str]]:
+    """Tier 0: Resolve split mapping using sub-risk descriptions.
+
+    Scores each sub-risk description against keyword sets for candidate L2s.
+    A single sub-risk can evidence multiple L2s simultaneously.
+
+    Returns (selected_l2, confidence, method, matched_descriptions).
+    Returns (None, ...) if sub-risks don't resolve it.
+    """
+    entity_subs = sub_risk_index.get(entity_id, {})
+    descriptions = entity_subs.get(legacy_pillar, [])
+
+    if not descriptions:
+        return None, "", "", []
+
+    # Score each description against all candidate L2s
+    l2_scores = {l2: 0 for l2 in target_l2s}
+    l2_evidence = {l2: [] for l2 in target_l2s}
+
+    for desc in descriptions:
+        desc_lower = desc.lower()
+        for l2 in target_l2s:
+            keywords = KEYWORD_MAP.get(l2, [])
+            hits = sum(1 for kw in keywords if kw.lower() in desc_lower)
+            if hits > 0:
+                l2_scores[l2] += hits
+                l2_evidence[l2].append(desc[:100])  # truncate for logging
+
+    max_score = max(l2_scores.values())
+    if max_score == 0:
+        return None, "", "", []
+
+    top_l2s = [l2 for l2, s in l2_scores.items() if s == max_score]
+    matched_descs = []
+    for l2 in top_l2s:
+        matched_descs.extend(l2_evidence[l2])
+
+    if len(top_l2s) == 1:
+        confidence = "high" if max_score >= 3 else "medium"
+        return top_l2s[0], confidence, "sub_risk_lookup", matched_descs
+    else:
+        # Multiple L2s scored — pick highest, but this is actually useful info:
+        # it means the entity has sub-risks spanning multiple L2s.
+        # Return the top one; the others will still get gap-filled or caught
+        # by the rationale keyword fallback for other legacy pillars.
+        return top_l2s[0], "medium", "sub_risk_tie", matched_descs
+
+
+def resolve_split_mapping(
+    legacy_pillar: str,
+    rationale: str,
+    target_l2s: list[str],
+    entity_id: str = None,
+    sub_risk_index: dict = None,
+    overrides: dict = None,
+) -> tuple[str, str, str, list[str]]:
+    """Resolve a 1:many mapping. Checks Override first, then Tier 0 (sub-risks),
+    then falls back to Tier 1 (keyword matching on rationale).
+
+    Returns (selected_l2, confidence, method, sub_risk_evidence).
+    """
+    # Override: LLM-classified result from previous run
+    if overrides and entity_id:
+        key = (entity_id, legacy_pillar)
+        if key in overrides:
+            ovr = overrides[key]
+            return ovr["l2"], ovr["confidence"], "llm_override", []
+
+    # Tier 0: Sub-risk descriptions
+    if sub_risk_index and entity_id:
+        result_l2, conf, method, evidence = resolve_via_sub_risks(
+            entity_id, legacy_pillar, target_l2s, sub_risk_index
+        )
+        if result_l2:
+            return result_l2, conf, method, evidence
+
+    # Tier 1: Keyword matching on rationale text
+    scores = score_rationale_against_keywords(rationale, target_l2s)
+    max_score = max(scores.values()) if scores else 0
+
+    if max_score == 0:
+        return target_l2s[0], "low", "default_first_l2", []
+
+    top_l2s = [l2 for l2, s in scores.items() if s == max_score]
+    if len(top_l2s) == 1:
+        confidence = "high" if max_score >= 3 else "medium"
+        return top_l2s[0], confidence, "keyword_match", []
+    else:
+        return top_l2s[0], "low", "keyword_tie", []
+
+
+def transform_entity(
+    entity_id: str,
+    entity_row: pd.Series,
+    crosswalk: dict,
+    pillar_columns: dict,
+    sub_risk_index: dict = None,
+    overrides: dict = None,
+) -> tuple[list[dict], list[dict]]:
+    """Transform one audit entity from legacy to new taxonomy.
+
+    Args:
+        entity_id: The audit entity identifier (e.g., "AE-7")
+        entity_row: The full row from the legacy DataFrame
+        crosswalk: The CROSSWALK_CONFIG dict
+        pillar_columns: Dict mapping legacy pillar name to its column names
+        sub_risk_index: Optional dict from build_sub_risk_index()
+        overrides: Optional dict from load_overrides()
+
+    Returns:
+        (transformed_rows, overlay_flags)
+    """
+    transformed = []
+    overlays = []
+    mapped_l2s = set()
+
+    for legacy_pillar, config in crosswalk.items():
+        # Get legacy data for this pillar
+        cols = pillar_columns.get(legacy_pillar)
+        if not cols:
+            log.warning(f"  Entity {entity_id}: No columns found for '{legacy_pillar}'")
+            continue
+
+        rating_raw = entity_row.get(cols.get("rating"))
+        rationale = entity_row.get(cols.get("rationale"), "")
+        control_raw = entity_row.get(cols.get("control"))
+        control_rationale = entity_row.get(cols.get("control_rationale"), "")
+
+        rating_numeric = convert_risk_rating(rating_raw)
+        control_numeric = convert_control_rating(control_raw)
+
+        # Skip N/A ratings — flag all candidate L2s as not applicable
+        raw_str = str(rating_raw).strip().lower() if rating_raw and not pd.isna(rating_raw) else ""
+        is_na = (rating_numeric is None and raw_str in ("not applicable", "n/a", "na", ""))
+
+        if is_na and config.get("mapping_type") != "overlay":
+            # Determine which L2s this pillar would have mapped to
+            mt = config.get("mapping_type", "")
+            if mt in ("direct", "broader"):
+                na_l2s = [config["target_l2"]]
+            elif mt == "multi":
+                na_l2s = [t["l2"] for t in config["targets"]]
+            elif mt == "split":
+                na_l2s = config.get("target_l2s", [])
+            else:
+                na_l2s = []
+
+            for l2_name in na_l2s:
+                l1 = L2_TO_L1.get(l2_name, "UNKNOWN")
+                mapped_l2s.add(l2_name)
+                transformed.append({
+                    "entity_id": entity_id,
+                    "new_l1": l1,
+                    "new_l2": l2_name,
+                    "composite_key": f"{l2_name} {entity_id}",
+                    "likelihood": None,
+                    "impact_financial": None,
+                    "impact_reputational": None,
+                    "impact_consumer_harm": None,
+                    "impact_regulatory": None,
+                    "iag_control_effectiveness": None,
+                    "aligned_assurance_rating": None,
+                    "management_awareness_rating": None,
+                    "source_legacy_pillar": legacy_pillar,
+                    "source_risk_rating_raw": rating_raw,
+                    "source_rationale": str(rationale) if rationale else "",
+                    "source_control_raw": control_raw,
+                    "source_control_rationale": "",
+                    "mapping_type": config.get("mapping_type", ""),
+                    "confidence": "n/a",
+                    "method": "source_not_applicable",
+                    "dims_parsed_from_rationale": False,
+                    "sub_risk_evidence": "",
+                    "needs_review": False,
+                })
+            log.info(f"  Entity {entity_id}: '{legacy_pillar}' → N/A, flagged {len(na_l2s)} L2s as not applicable")
+            continue
+
+        # Parse rationale for explicit dimension mentions
+        parsed_dims = parse_rationale_for_dimensions(str(rationale))
+
+        # Build the 5 risk dimension values
+        likelihood = parsed_dims.get("likelihood", rating_numeric)
+        impact_financial = parsed_dims.get("impact_financial", rating_numeric)
+        impact_reputational = parsed_dims.get("impact_reputational", rating_numeric)
+        impact_consumer = parsed_dims.get("impact_consumer", rating_numeric)
+        impact_regulatory = parsed_dims.get("impact_regulatory", rating_numeric)
+        # If generic "impact" was parsed, use it as default for all impact cols
+        if "impact" in parsed_dims:
+            generic_impact = parsed_dims["impact"]
+            impact_financial = parsed_dims.get("impact_financial", generic_impact)
+            impact_reputational = parsed_dims.get("impact_reputational", generic_impact)
+            impact_consumer = parsed_dims.get("impact_consumer", generic_impact)
+            impact_regulatory = parsed_dims.get("impact_regulatory", generic_impact)
+
+        mapping_type = config["mapping_type"]
+
+        if mapping_type == "overlay":
+            for target_l2 in config["target_l2s"]:
+                overlays.append({
+                    "entity_id": entity_id,
+                    "target_l2": target_l2,
+                    "overlay_source": legacy_pillar,
+                    "overlay_rating": rating_numeric,
+                    "overlay_rationale": str(rationale),
+                })
+            log.info(f"  Entity {entity_id}: '{legacy_pillar}' → overlay on {config['target_l2s']}")
+            continue
+
+        # Build list of target L2s to create rows for
+        if mapping_type in ("direct", "broader"):
+            targets_to_create = [{
+                "l2": config["target_l2"],
+                "confidence": "high",
+                "method": mapping_type,
+                "sub_risk_evidence": [],
+            }]
+
+        elif mapping_type == "multi":
+            # Evidence-based multi-target: score each candidate L2 against
+            # sub-risk descriptions and rationale keywords. Only populate
+            # L2s that have actual evidence. If none match, default to
+            # first primary and flag for review.
+            targets_to_create = []
+
+            # Build combined text from rationale + sub-risk descriptions
+            combined_text = str(rationale).lower()
+            entity_subs = (sub_risk_index or {}).get(entity_id, {})
+            sub_descs = entity_subs.get(legacy_pillar, [])
+            for desc in sub_descs:
+                combined_text += " " + desc.lower()
+
+            # Check for LLM overrides first
+            first_primary_l2 = None
+            for target in config["targets"]:
+                if target["relationship"] == "primary" and not first_primary_l2:
+                    first_primary_l2 = target["l2"]
+
+                # Check LLM override for this entity+pillar→L2
+                if overrides and entity_id:
+                    key = (entity_id, legacy_pillar)
+                    if key in overrides:
+                        ovr = overrides[key]
+                        if ovr["l2"] == target["l2"]:
+                            targets_to_create.append({
+                                "l2": target["l2"],
+                                "confidence": ovr["confidence"],
+                                "method": "llm_override",
+                                "sub_risk_evidence": [],
+                            })
+                            continue
+
+                # Score this L2 against combined text using KEYWORD_MAP
+                l2_name = target["l2"]
+                keywords = KEYWORD_MAP.get(l2_name, [])
+                hits = [kw for kw in keywords if kw.lower() in combined_text]
+                score = len(hits)
+
+                # Also check conditional-specific keywords if present
+                conditions = target.get("conditions", [])
+                condition_hits = [c for c in conditions if c.lower() in combined_text]
+                score += len(condition_hits)
+                all_evidence = (hits + condition_hits)[:8]
+
+                rel = target["relationship"]
+
+                if score > 0:
+                    # Evidence found — populate this L2
+                    if score >= 3:
+                        confidence = "high"
+                    elif score >= 1:
+                        confidence = "medium"
+                    method = f"evidence_match ({rel})"
+                    targets_to_create.append({
+                        "l2": l2_name,
+                        "confidence": confidence,
+                        "method": method,
+                        "sub_risk_evidence": all_evidence,
+                    })
+
+            # If no L2s had evidence, default to first primary and flag
+            if not targets_to_create:
+                if first_primary_l2:
+                    targets_to_create.append({
+                        "l2": first_primary_l2,
+                        "confidence": "low",
+                        "method": "default_no_evidence",
+                        "sub_risk_evidence": [],
+                    })
+                    log.info(
+                        f"  Entity {entity_id}: '{legacy_pillar}' → no evidence for any L2, "
+                        f"defaulted to '{first_primary_l2}' — FLAGGED FOR REVIEW"
+                    )
+                else:
+                    log.warning(
+                        f"  Entity {entity_id}: '{legacy_pillar}' multi mapping "
+                        f"produced no targets and has no primary fallback"
+                    )
+                    continue
+
+        elif mapping_type == "split":
+            selected_l2, confidence, method, sub_risk_evidence = resolve_split_mapping(
+                legacy_pillar, str(rationale), config["target_l2s"],
+                entity_id=entity_id, sub_risk_index=sub_risk_index,
+                overrides=overrides,
+            )
+            targets_to_create = [{
+                "l2": selected_l2,
+                "confidence": confidence,
+                "method": method,
+                "sub_risk_evidence": sub_risk_evidence,
+            }]
+        else:
+            log.error(f"  Unknown mapping_type '{mapping_type}' for '{legacy_pillar}'")
+            continue
+
+        dims_were_parsed = bool(parsed_dims)
+
+        for tgt in targets_to_create:
+            selected_l2 = tgt["l2"]
+            l1 = L2_TO_L1.get(selected_l2, "UNKNOWN")
+            mapped_l2s.add(selected_l2)
+
+            row = {
+                "entity_id": entity_id,
+                "new_l1": l1,
+                "new_l2": selected_l2,
+                "composite_key": f"{selected_l2} {entity_id}",
+                "likelihood": likelihood,
+                "impact_financial": impact_financial,
+                "impact_reputational": impact_reputational,
+                "impact_consumer_harm": impact_consumer,
+                "impact_regulatory": impact_regulatory,
+                "iag_control_effectiveness": control_numeric,
+                "aligned_assurance_rating": control_numeric,
+                "management_awareness_rating": control_numeric,
+                "source_legacy_pillar": legacy_pillar,
+                "source_risk_rating_raw": rating_raw,
+                "source_rationale": str(rationale) if rationale else "",
+                "source_control_raw": control_raw,
+                "source_control_rationale": str(control_rationale) if control_rationale else "",
+                "mapping_type": mapping_type,
+                "confidence": tgt["confidence"],
+                "method": tgt["method"],
+                "dims_parsed_from_rationale": dims_were_parsed,
+                "sub_risk_evidence": "; ".join(tgt["sub_risk_evidence"]) if tgt["sub_risk_evidence"] else "",
+                "needs_review": tgt["confidence"] == "low",
+            }
+            transformed.append(row)
+            log.info(
+                f"  Entity {entity_id}: '{legacy_pillar}' → {l1} / {selected_l2} "
+                f"[{tgt['method']}, conf={tgt['confidence']}]"
+            )
+
+    # --- Deduplicate: when multiple old L1s map to the same new L2 ---
+    # Keep the row with the higher (more conservative) rating.
+    # Log both sources for traceability.
+    seen = {}
+    deduped = []
+    for row in transformed:
+        l2 = row["new_l2"]
+        if l2 not in seen:
+            seen[l2] = len(deduped)
+            deduped.append(row)
+        else:
+            existing = deduped[seen[l2]]
+            existing_rating = existing.get("likelihood") or 0
+            new_rating = row.get("likelihood") or 0
+            if new_rating > existing_rating:
+                row["source_legacy_pillar"] = (
+                    f"{row['source_legacy_pillar']} (also: {existing['source_legacy_pillar']})"
+                )
+                row["method"] = f"{row['method']} (dedup: kept higher)"
+                deduped[seen[l2]] = row
+            else:
+                existing["source_legacy_pillar"] = (
+                    f"{existing['source_legacy_pillar']} (also: {row['source_legacy_pillar']})"
+                )
+                if "dedup" not in existing.get("method", ""):
+                    existing["method"] = f"{existing['method']} (dedup: kept higher)"
+            log.info(
+                f"  Entity {entity_id}: DEDUP '{l2}' — "
+                f"'{row['source_legacy_pillar']}' vs existing"
+            )
+    transformed = deduped
+
+    # Identify any new L2 risks with NO legacy mapping (gaps)
+    for l2 in ALL_L2_RISKS:
+        if l2 not in mapped_l2s:
+            l1 = L2_TO_L1[l2]
+            transformed.append({
+                "entity_id": entity_id,
+                "new_l1": l1,
+                "new_l2": l2,
+                "composite_key": f"{l2} {entity_id}",
+                "likelihood": None,
+                "impact_financial": None,
+                "impact_reputational": None,
+                "impact_consumer_harm": None,
+                "impact_regulatory": None,
+                "iag_control_effectiveness": None,
+                "aligned_assurance_rating": None,
+                "management_awareness_rating": None,
+                "source_legacy_pillar": None,
+                "source_risk_rating_raw": None,
+                "source_rationale": "",
+                "source_control_raw": None,
+                "source_control_rationale": "",
+                "mapping_type": "no_legacy_source",
+                "confidence": "none",
+                "method": "gap_fill",
+                "dims_parsed_from_rationale": False,
+                "sub_risk_evidence": "",
+                "needs_review": False,
+            })
+
+    return transformed, overlays
+
+
+# =============================================================================
+# SECTION 5: PIPELINE & EXPORT
+# =============================================================================
+
+def run_pipeline(
+    legacy_df: pd.DataFrame,
+    crosswalk: dict,
+    entity_id_col: str,
+    pillar_columns: dict,
+    sub_risk_index: dict = None,
+    overrides: dict = None,
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """Run the full transformation pipeline across all entities.
+
+    Returns (transformed_df, overlays_df).
+    """
+    all_transformed = []
+    all_overlays = []
+
+    for idx, row in legacy_df.iterrows():
+        entity_id = str(row[entity_id_col]).strip()
+        log.info(f"Processing entity {entity_id} ({idx + 1}/{len(legacy_df)})")
+        transformed, overlays = transform_entity(
+            entity_id, row, crosswalk, pillar_columns,
+            sub_risk_index=sub_risk_index,
+            overrides=overrides,
+        )
+        all_transformed.extend(transformed)
+        all_overlays.extend(overlays)
+
+    transformed_df = pd.DataFrame(all_transformed)
+    overlays_df = pd.DataFrame(all_overlays) if all_overlays else pd.DataFrame()
+
+    # Summary stats
+    total = len(transformed_df)
+    needs_review = transformed_df["needs_review"].sum()
+    high_conf = (transformed_df["confidence"] == "high").sum()
+    med_conf = (transformed_df["confidence"] == "medium").sum()
+    low_conf = (transformed_df["confidence"] == "low").sum()
+    gaps = (transformed_df["method"] == "gap_fill").sum()
+
+    log.info("=" * 60)
+    log.info(f"TRANSFORMATION COMPLETE")
+    log.info(f"  Total rows: {total}")
+    log.info(f"  High confidence: {high_conf} ({high_conf/total*100:.1f}%)")
+    log.info(f"  Medium confidence: {med_conf} ({med_conf/total*100:.1f}%)")
+    log.info(f"  Low confidence / needs review: {low_conf} ({low_conf/total*100:.1f}%)")
+    na_rows = (transformed_df["method"] == "source_not_applicable").sum()
+    log.info(f"  Source N/A (skipped): {na_rows}")
+    log.info(f"  Gap fills (no legacy source): {gaps}")
+    evidence_matches = transformed_df["method"].str.contains("evidence_match", na=False).sum()
+    evidence_high = (transformed_df["method"].str.contains("evidence_match", na=False) & (transformed_df["confidence"] == "high")).sum()
+    evidence_med = (transformed_df["method"].str.contains("evidence_match", na=False) & (transformed_df["confidence"] == "medium")).sum()
+    defaults_no_evidence = (transformed_df["method"] == "default_no_evidence").sum()
+    llm_overrides = transformed_df["method"].str.contains("llm_override", na=False).sum()
+    dedup_count = transformed_df["method"].str.contains("dedup", na=False).sum()
+    dims_parsed = transformed_df["dims_parsed_from_rationale"].sum()
+    log.info(f"  Evidence-based matches: {evidence_matches} (high: {evidence_high}, medium: {evidence_med})")
+    log.info(f"  Default no evidence (flagged for review): {defaults_no_evidence}")
+    log.info(f"  Resolved via LLM overrides: {llm_overrides}")
+    log.info(f"  Deduplicated (multiple sources → same L2): {dedup_count}")
+    log.info(f"  Dimensions parsed from rationale: {dims_parsed}")
+    log.info(f"  Overlay flags: {len(overlays_df)}")
+    log.info(f"  Flagged for review: {needs_review}")
+    log.info("=" * 60)
+
+    return transformed_df, overlays_df
+
+
+def apply_overlay_flags(transformed_df: pd.DataFrame, overlays_df: pd.DataFrame) -> pd.DataFrame:
+    """Join overlay flags onto the transformed data."""
+    if overlays_df.empty:
+        transformed_df["overlay_flag"] = False
+        transformed_df["overlay_source"] = ""
+        transformed_df["overlay_rating"] = None
+        transformed_df["overlay_rationale"] = ""
+        return transformed_df
+
+    # Aggregate overlays per entity+L2
+    overlay_agg = (
+        overlays_df
+        .groupby(["entity_id", "target_l2"])
+        .agg({
+            "overlay_source": lambda x: "; ".join(x),
+            "overlay_rating": "max",
+            "overlay_rationale": lambda x: " | ".join(x),
+        })
+        .reset_index()
+    )
+
+    merged = transformed_df.merge(
+        overlay_agg,
+        left_on=["entity_id", "new_l2"],
+        right_on=["entity_id", "target_l2"],
+        how="left",
+        suffixes=("", "_overlay"),
+    )
+    merged["overlay_flag"] = merged["target_l2"].notna()
+    merged.drop(columns=["target_l2"], errors="ignore", inplace=True)
+    merged["overlay_source"] = merged["overlay_source"].fillna("")
+    merged["overlay_rationale"] = merged["overlay_rationale"].fillna("")
+
+    return merged
+
+
+def style_header(ws, max_col: int):
+    """Apply header styling to first row."""
+    header_font = Font(bold=True, color="FFFFFF", size=10, name="Arial")
+    header_fill = PatternFill("solid", fgColor="2F5496")
+    header_align = Alignment(horizontal="center", vertical="center", wrap_text=True)
+    thin_border = Border(
+        left=Side(style="thin"),
+        right=Side(style="thin"),
+        top=Side(style="thin"),
+        bottom=Side(style="thin"),
+    )
+    for col_idx in range(1, max_col + 1):
+        cell = ws.cell(row=1, column=col_idx)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_align
+        cell.border = thin_border
+
+
+def export_results(
+    transformed_df: pd.DataFrame,
+    overlays_df: pd.DataFrame,
+    legacy_df: pd.DataFrame,
+    entity_id_col: str,
+    output_path: str,
+):
+    """Write multi-sheet Excel output."""
+    log.info(f"Writing output to {output_path}")
+
+    # --- Sheet 1: Transformed (clean upload-ready format) ---
+    upload_cols = [
+        "composite_key", "entity_id", "new_l1", "new_l2",
+        "likelihood", "impact_financial", "impact_reputational",
+        "impact_consumer_harm", "impact_regulatory",
+        "iag_control_effectiveness", "aligned_assurance_rating",
+        "management_awareness_rating",
+    ]
+    upload_df = transformed_df[upload_cols].copy()
+    upload_df.columns = [
+        "Risk-Entity Key", "Entity ID", "L1 Risk Pillar", "L2 Risk",
+        "Likelihood", "Impact - Financial", "Impact - Reputational",
+        "Impact - Consumer Harm", "Impact - Regulatory",
+        "IAG Control Effectiveness", "Aligned Assurance Rating",
+        "Management Awareness Rating",
+    ]
+
+    # --- Sheet 2: Side-by-side traceability ---
+    trace_cols = [
+        "composite_key", "entity_id", "new_l1", "new_l2",
+        "likelihood", "impact_financial", "impact_reputational",
+        "impact_consumer_harm", "impact_regulatory",
+        "iag_control_effectiveness", "aligned_assurance_rating",
+        "management_awareness_rating",
+        "source_legacy_pillar", "source_risk_rating_raw", "source_rationale",
+        "source_control_raw", "source_control_rationale",
+        "mapping_type", "confidence", "method",
+        "dims_parsed_from_rationale", "sub_risk_evidence", "needs_review",
+        "overlay_flag", "overlay_source", "overlay_rating", "overlay_rationale",
+    ]
+    available_trace_cols = [c for c in trace_cols if c in transformed_df.columns]
+    trace_df = transformed_df[available_trace_cols].copy()
+
+    # --- Sheet 3: Legacy original ---
+    legacy_out = legacy_df.copy()
+
+    # --- Sheet 4: Review queue ---
+    review_df = transformed_df[transformed_df["needs_review"]].copy()
+
+    # --- Sheet 5: Overlay flags ---
+    overlay_out = overlays_df.copy() if not overlays_df.empty else pd.DataFrame()
+
+    # Write with openpyxl via pandas ExcelWriter
+    with pd.ExcelWriter(output_path, engine="openpyxl") as writer:
+        upload_df.to_excel(writer, sheet_name="Transformed_Upload", index=False)
+        trace_df.to_excel(writer, sheet_name="Side_by_Side", index=False)
+        legacy_out.to_excel(writer, sheet_name="Legacy_Original", index=False)
+        review_df.to_excel(writer, sheet_name="Review_Queue", index=False)
+        if not overlay_out.empty:
+            overlay_out.to_excel(writer, sheet_name="Overlay_Flags", index=False)
+
+    # Apply formatting
+    wb = load_workbook(output_path)
+    for ws_name in wb.sheetnames:
+        ws = wb[ws_name]
+        style_header(ws, ws.max_column)
+        # Auto-width columns (cap at 40)
+        for col in ws.columns:
+            max_len = 0
+            col_letter = col[0].column_letter
+            for cell in col:
+                try:
+                    if cell.value:
+                        max_len = max(max_len, len(str(cell.value)))
+                except:
+                    pass
+            ws.column_dimensions[col_letter].width = min(max(max_len + 2, 12), 40)
+
+        # Highlight needs_review rows in yellow on Side_by_Side
+        if ws_name == "Side_by_Side":
+            review_col = None
+            for cell in ws[1]:
+                if cell.value == "needs_review":
+                    review_col = cell.column
+                    break
+            if review_col:
+                yellow = PatternFill("solid", fgColor="FFFF00")
+                for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                    if row[review_col - 1].value is True:
+                        for cell in row:
+                            cell.fill = yellow
+
+        # Highlight all rows in Review_Queue
+        if ws_name == "Review_Queue":
+            light_red = PatternFill("solid", fgColor="FFC7CE")
+            for row in ws.iter_rows(min_row=2, max_row=ws.max_row):
+                for cell in row:
+                    cell.fill = light_red
+
+    wb.save(output_path)
+    log.info(f"  Output saved: {output_path}")
+    log.info(f"  Sheets: {wb.sheetnames}")
+
+
+# =============================================================================
+# SECTION 6: MAIN — CONFIGURE AND RUN
+# =============================================================================
+
+def main():
+    # -------------------------------------------------------------------------
+    # CONFIGURE THESE PATHS AND COLUMN NAMES
+    # -------------------------------------------------------------------------
+    LEGACY_DATA_PATH = "legacy_risk_data.xlsx"       # Your entity data file
+    CROSSWALK_PATH = None                             # Set path or None to use hardcoded
+    OUTPUT_PATH = "transformed_risk_taxonomy.xlsx"
+    ENTITY_ID_COL = "Entity ID"                       # Column name for audit entity ID
+
+    # Sub-risk descriptions file (optional but recommended for split accuracy)
+    # Set to None to skip sub-risk lookup and use keyword matching only.
+    SUB_RISK_PATH = "sub_risk_descriptions.xlsx"      # Your sub-risk file
+    SUB_RISK_COLS = {
+        "entity_id": "Audit Entity ID",     # Column: audit entity identifier
+        "risk_id": "Risk ID",               # Column: risk ID (optional, for traceability)
+        "risk_desc": "Risk Description",    # Column: free-text risk description
+        "legacy_l1": "L1 Risk Pillars",     # Column: legacy L1 pillar(s), tab-separated
+        "rating": "Inherent Risk Rating",   # Column: rating (optional, not used for scoring)
+    }
+
+    # LLM Override file (optional — produced by batching Review Queue through LLM)
+    # Set to None on first run. After LLM classification, point to the output file.
+    # Expected columns: entity_id, source_legacy_pillar, classified_l2, llm_confidence
+    OVERRIDE_PATH = None  # e.g., "llm_overrides.xlsx" or "llm_overrides.csv"
+
+    # Map each legacy pillar to its column names in the Excel file.
+    # Keys MUST match CROSSWALK_CONFIG keys exactly.
+    # Adjust column headers to match your actual file.
+    PILLAR_COLUMNS = {
+        "Credit": {
+            "rating": "Credit - Inherent Risk Rating",
+            "rationale": "Credit - Rationale",
+            "control": "Credit - Control Assessment",
+            "control_rationale": "Credit - Control Rationale",
+        },
+        "Market": {
+            "rating": "Market - Inherent Risk Rating",
+            "rationale": "Market - Rationale",
+            "control": "Market - Control Assessment",
+            "control_rationale": "Market - Control Rationale",
+        },
+        # ... REPEAT FOR ALL 14: Strategic & Business, Funding and Liquidity,
+        #     Reputational, Model, Third Party, Financial Reporting,
+        #     External Fraud, Information Technology, Information Security,
+        #     Operational, Compliance, Country ...
+        #
+        # TIP: If your columns follow a consistent pattern like
+        # "{Pillar} - Inherent Risk Rating", use the auto-generator below.
+    }
+
+    # -------------------------------------------------------------------------
+    # HELPER: Auto-generate PILLAR_COLUMNS if naming is consistent
+    # Uncomment and adjust the pattern if your columns follow a convention.
+    # -------------------------------------------------------------------------
+    # PILLAR_COLUMNS = {}
+    # for pillar_name in CROSSWALK_CONFIG.keys():
+    #     PILLAR_COLUMNS[pillar_name] = {
+    #         "rating":            f"{pillar_name} - Inherent Risk Rating",
+    #         "rationale":         f"{pillar_name} - Rationale",
+    #         "control":           f"{pillar_name} - Control Assessment",
+    #         "control_rationale": f"{pillar_name} - Control Rationale",
+    #     }
+
+    # -------------------------------------------------------------------------
+    # RUN
+    # -------------------------------------------------------------------------
+    crosswalk = ingest_crosswalk(CROSSWALK_PATH)
+    legacy_df = ingest_legacy_data(LEGACY_DATA_PATH)
+
+    # Load sub-risk descriptions if configured
+    sub_risk_index = None
+    if SUB_RISK_PATH:
+        sub_risks_df = ingest_sub_risks(
+            SUB_RISK_PATH,
+            entity_id_col=SUB_RISK_COLS["entity_id"],
+            legacy_l1_col=SUB_RISK_COLS["legacy_l1"],
+            risk_desc_col=SUB_RISK_COLS["risk_desc"],
+            risk_id_col=SUB_RISK_COLS.get("risk_id"),
+            rating_col=SUB_RISK_COLS.get("rating"),
+        )
+        sub_risk_index = build_sub_risk_index(sub_risks_df)
+        log.info(f"  Sub-risk index built: {len(sub_risk_index)} entities with sub-risks")
+
+    # Load LLM overrides if configured
+    overrides = None
+    if OVERRIDE_PATH:
+        overrides = load_overrides(OVERRIDE_PATH)
+        log.info(f"  Override index built: {len(overrides)} entity-pillar overrides")
+
+    transformed_df, overlays_df = run_pipeline(
+        legacy_df, crosswalk, ENTITY_ID_COL, PILLAR_COLUMNS,
+        sub_risk_index=sub_risk_index,
+        overrides=overrides,
+    )
+
+    transformed_df = apply_overlay_flags(transformed_df, overlays_df)
+
+    export_results(
+        transformed_df, overlays_df, legacy_df,
+        ENTITY_ID_COL, OUTPUT_PATH
+    )
+
+    print(f"\nDone! Output: {OUTPUT_PATH}")
+    print(f"Review queue: {transformed_df['needs_review'].sum()} items flagged")
+
+
+if __name__ == "__main__":
+    main()
