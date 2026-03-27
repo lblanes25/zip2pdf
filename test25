@@ -1,0 +1,78 @@
+# Prompt: Extract and Remap Config from Current Script
+
+Use this prompt in a new conversation. Attach BOTH your current working script and the new updated script. The LLM will extract your customizations and produce updated config blocks for the new script.
+
+---
+
+## PROMPT (copy everything below this line)
+
+I have two Python scripts attached:
+
+1. **Current working script** — this is the version I've been running. It has my actual PILLAR_COLUMNS, CROSSWALK_CONFIG, KEYWORD_MAP, and any other customizations I've made (file paths, column names, etc.). This is the source of truth for what works with my data.
+
+2. **New updated script** — this is a rebuilt version with multi-target mapping support, updated NEW_TAXONOMY, and new CROSSWALK_CONFIG. The PILLAR_COLUMNS in this script are still placeholder examples and need to be updated.
+
+### Your tasks:
+
+**Task 1 — Extract my current PILLAR_COLUMNS**
+
+From the current working script, extract the complete PILLAR_COLUMNS dict. List every legacy pillar key and its 4 column header values (rating, rationale, control, control_rationale). If I used the auto-generator helper instead of a manual dict, extract the pattern.
+
+**Task 2 — Map old keys to new crosswalk keys**
+
+The new script's CROSSWALK_CONFIG uses these 14 keys:
+- Credit
+- Market
+- Strategic & Business
+- Funding and Liquidity
+- Reputational
+- Model
+- Third Party
+- Financial Reporting
+- External Fraud
+- Information Technology
+- Information Security
+- Operational
+- Compliance
+- Country
+
+My current script may use different key names (e.g., "Credit Risk" instead of "Credit", or "Funding & Liquidity" instead of "Funding and Liquidity"). Create a mapping from old key → new key for every pillar, and flag any that don't have an obvious match.
+
+**Task 3 — Produce updated PILLAR_COLUMNS for the new script**
+
+Using the column headers from my current working script and the new crosswalk keys, produce a complete PILLAR_COLUMNS dict I can paste directly into the new script's `main()` function. The keys must match the CROSSWALK_CONFIG keys exactly.
+
+Format:
+```python
+PILLAR_COLUMNS = {
+    "Credit": {
+        "rating": "exact column header from my file",
+        "rationale": "exact column header from my file",
+        "control": "exact column header from my file",
+        "control_rationale": "exact column header from my file",
+    },
+    # ... all 14 pillars
+}
+```
+
+**Task 4 — Extract any other customizations**
+
+From my current working script, extract and list any other changes I've made that should carry over to the new script:
+- File paths (LEGACY_DATA_PATH, SUB_RISK_PATH, OVERRIDE_PATH, OUTPUT_PATH)
+- SUB_RISK_COLS configuration
+- ENTITY_ID_COL value
+- Any modifications to KEYWORD_MAP that aren't in the new script's version
+- Any changes to rating maps (RISK_RATING_MAP, CONTROL_RATING_MAP)
+- Any code changes outside the config sections
+
+For each, show me the current value and note whether the new script already has it or if I need to paste it in.
+
+### Output format:
+
+Return these clearly labeled code blocks:
+1. **Key mapping table** — old key → new key for all 14 pillars
+2. **PILLAR_COLUMNS** — complete dict ready to paste
+3. **Other config values** — any paths, column names, or customizations to carry over
+4. **Warnings** — anything that doesn't map cleanly or needs manual verification
+
+---
