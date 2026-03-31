@@ -103,3 +103,119 @@ This format is designed so I can quickly update the master context document and 
 - Don't guess at timelines unless I ask.
 - Be direct. Don't pad things.
 - If something looks stalled or like I'm avoiding it — say so.
+
+
+
+Project Plan (Airtable) Summary
+The Airtable is organized as: Objectives → Key Results → Workstreams → Milestones → Tasks
+Known issues with the Airtable:
+
+Statuses don't always reflect reality (items marked "not started" that have been worked on)
+Most audit engagement tasks are tagged to my director, not me, even though I'm doing the work
+Some task assignments seem misplaced (e.g., methodology documentation updates assigned to our team instead of the methodology team)
+The "configuration decision log" tab contains questions, not actual decisions
+
+Supplementary Airtable tabs: Risks and feedback, foundational data elements (inventories/libraries), beta team tracking, end user training considerations, configuration decision log, audit plan updates, sandbox duplication notes, AI use case listing.
+
+SharePoint Structure
+AuditBoard Implementation folder contains:
+
+Workstream 1 (Audit Engagement) — subfolders from planning to reporting/wrap-up
+Workstream 2 (Audit Universe & Risk Assessment)
+Workstream 3 (Annual Audit Plan)
+Workstream 4 (Issue Management)
+Working group folder
+Pilots/beta folders
+Audit scoping / future state vision
+AuditBoard field redesign folder
+Test workpaper source files
+
+Planned but may not yet exist: Dedicated SharePoint folders for Fieldwork, Planning, and AERA L2 to consolidate email chains, Excel files, reference docs, and correspondence.
+
+Current-State Inventory: Archer Baseline
+STATUS: NOT STARTED
+No systematic documentation exists of every form, field, template, and workflow across all audit phases. Work to date has been conversation-driven, not baseline-driven. This is the highest-priority gap.
+Phases to inventory:
+
+ Planning
+ Fieldwork
+ Reporting / Wrap-up
+ Issue Management
+ Audit Universe & Risk Assessment
+
+For each phase, capture: forms, fields, templates, workflow logic, data flows, reporting dependencies.
+
+Artifacts That Exist (My Work Products)
+Fieldwork Crosswalk (Archer → Proposed AuditBoard)
+
+Status: Most mature. Has both status-quo version and proposed redesign.
+Sub-questions: 13 across 6 categories (Who, What, When, Where, Why, How). Nudges on 5 questions. Stress-tested against first-year auditor scenario.
+Inventory/Reporting Section: Designed for 5 categories (Applications, Third Parties, Models, Mandates, Policies or Procedures). Two-field design pattern per category. Applications built in AuditBoard as proof of concept.
+Stakeholder status: Mark reviewed and aligned. Ready to share with Mark, Heather, Keith.
+Key decisions: "Where" scoped to 1 sub-question. Sub-questions designed as prompts not essays. Three How questions left for Mark/Heather to trim. Mandates has biggest structural gap.
+Back burner: SAP element checklist per category for reliance/scoping transparency.
+Location: [UPDATE WITH FILE PATH]
+
+Planning Crosswalk (Archer → Proposed AuditBoard)
+
+Status: In progress. Sent to Elaine, Katie, Heather. Has methodology comments.
+Stakeholder status: Matt's questions resolved. Sana addressed procedures/template questions but underlying docs need updating. Mark has bigger ideas (longer-term).
+Open questions: Procedures unclear on full guidance vs. procedures manual split. Confusing optional template. Archer-to-AuditBoard planning workflow not fully documented.
+Location: [UPDATE WITH FILE PATH]
+
+AERA Risk Assessment Matrix (Old 14 Pillars → New 23 Pillars)
+
+Status: Being recreated from scratch. Council driving decisions, not finalized.
+What exists: Mapping matrix from old to new pillars. Guidance document for teams.
+What doesn't exist: Granular process flows. Policy/procedure updates. Unclear if those are our responsibility or methodology's.
+Location: [UPDATE WITH FILE PATH]
+
+AERA L2 Analysis (Inherent Risk Rating & Control Assessment Criteria)
+
+Status: Complete. RCSA policy + 7-8 related docs reviewed. Existence/gap list compiled.
+Next: Send to Matt.
+Location: [UPDATE WITH FILE PATH]
+
+Dummy Data / UAT Testing
+
+Status: Dummy data built. Manual entry into AuditBoard started.
+Blocker: Waiting on Anna for bulk upload template.
+
+
+What Does NOT Exist
+
+Complete Archer baseline inventory (highest priority gap)
+Formal gap analysis documents per phase
+Structured design documents (crosswalks serve informally)
+Decision log (who decided, when, why)
+Stakeholder sign-off records
+Training / change management materials for workflow changes
+Issue field comparison (waiting on Panbu for Archer side)
+Old AERA → New AERA formal translation mapping
+Reporting / wrap-up documentation (nothing exists)
+Granular process flows (called for in project plan, unclear ownership)
+
+
+Active Blockers and Dependencies
+Waiting OnWhatImpactElaine, Katie, HeatherPlanning checklist alignmentBlocks planning review with MarkAnnaBulk upload templateSlows UATPanbuArcher issue fields documentationBlocks issue field comparisonBrian & teamRisk & control considerationsBlocks Beta 2/3 fieldwork prepAuditBoard teamLibraries & inventories enablementBlocks library data in formsAERA CouncilFinal decisions on new pillar structureBlocks complete AERA documentation
+
+Beta Testing Status
+
+Beta 1: Complete. Workpapers moved, documentation approach locked.
+Beta 2 & 3: Kicked off. Intros and expectations set. Fieldwork starting April. Libraries may not be wired into workpapers in time — may need manual population.
+
+
+Open Questions
+
+Are methodology documentation updates (policy, procedures) our team's responsibility or the methodology team's?
+Do formal "requirements/design documents" need to exist for director/VP approval, or is the crosswalk sufficient?
+Should the Airtable be updated to reflect our team's actual progress, or do we maintain a separate tracker?
+Who is accountable for the tasks tagged to my director — her or me?
+
+
+Decision Log
+DateDecisionWhoContext
+(Start capturing decisions as they happen in spoke sessions)
+
+Change History
+DateWhat ChangedSourceMarch 30, 2026Initial document createdSetup spoke session
