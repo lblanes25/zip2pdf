@@ -6,6 +6,14 @@ Upload your trimmed CSV alongside this prompt. The CSV should contain only these
 
 **Edge columns:** Hand-offs from Other Audit Entities, Hand-offs to Other Audit Entities, Hand-off Description, PRIMARY IT APPLICATIONS, SECONDARY IT APPLICATIONS, PRIMARY TLM THIRD PARTY ENGAGEMENT(S), SECONDARY TLM THIRD PARTY ENGAGEMENT(S), Models, PRSA, POLICIES/STANDARDS/PROCEDURES
 
+**Risk assessment (14 risks, 3 columns each = 42 columns):**
+For each of the 14 risks, the CSV includes:
+- Overall Risk Rating (Not Applicable, Low, Medium, High, Critical)
+- Inherent Risk Rating (same scale)
+- Control Assessment Rating (Well Controlled, Partially Controlled, Insufficiently Controlled)
+
+Include all 42 risk columns with exact column names as they appear in the file.
+
 ---
 
 I've uploaded a CSV of our audit universe — one row per auditable entity. I need you to parse it into clean relational tables that will serve as the data foundation for audit planning and network analysis.
@@ -30,17 +38,28 @@ Create a table called **Nodes** — one row per remaining entity:
 - PGA/ASL
 - Horizontal Flag — mark as "horizontal" if the entity is a cross-cutting function (e.g., AML, IT, Compliance, Data Privacy, Outsourcing, Vendor Management). Otherwise "vertical."
 
-## Step 2: Relational Tables
+## Step 2: Risk Map
+
+Create a table called **Risk Map** — one row per entity-risk combination where the risk is applicable (exclude rows where Overall Risk Rating = "Not Applicable" or is blank):
+- Entity ID
+- Risk Name (derived from column header)
+- Overall Risk Rating (Not Applicable, Low, Medium, High, Critical)
+- Inherent Risk Rating (same scale)
+- Control Assessment Rating (Well Controlled, Partially Controlled, Insufficiently Controlled)
+
+This table will be used in Layer 2 to factor risk exposure into coverage decisions.
+
+## Step 3: Relational Tables
 
 Split multi-value cells and create one table per relationship type. For each table, standardize naming: if the same value appears with different spellings, capitalization, or formatting, unify them. Document every standardization decision you make in a separate log.
 
-### 2a. Handoffs
+### 3a. Handoffs
 - Source Entity ID
 - Target Entity ID
 - Direction: "to" (from Hand-offs to Other Audit Entities column) or "from" (from Hand-offs from Other Audit Entities column)
 - Flag any target/source IDs that don't match an entity in the Nodes table
 
-### 2b. Entity-Application
+### 3b. Entity-Application
 - Entity ID
 - Application Name
 - Relationship: "primary" or "secondary"
@@ -48,7 +67,7 @@ Split multi-value cells and create one table per relationship type. For each tab
   - **Secondary** (from SECONDARY IT APPLICATIONS): the entity's key controls depend on this application but it doesn't own the application controls
 - Standardize application names across both columns
 
-### 2c. Entity-Vendor
+### 3c. Entity-Vendor
 - Entity ID
 - Third Party Name
 - Relationship: "primary" or "secondary"
@@ -56,28 +75,28 @@ Split multi-value cells and create one table per relationship type. For each tab
   - **Secondary** (from SECONDARY TLM THIRD PARTY ENGAGEMENT(S)): the entity's key controls rely on this third party but it doesn't own the vendor relationship controls
 - Standardize vendor names across both columns
 
-### 2d. Entity-Model
+### 3d. Entity-Model
 - Entity ID
 - Model Name
 
-### 2e. Entity-PRSA (Exploratory)
+### 3e. Entity-PRSA (Exploratory)
 - Entity ID
 - PRSA value
 - Split from: PRSA column
 
-### 2f. Entity-Policy (Exploratory)
+### 3f. Entity-Policy (Exploratory)
 - Entity ID
 - Policy/Standard ID or Name
 - Split from: POLICIES/STANDARDS/PROCEDURES column
 - Normalize ID formats (spaces vs. underscores)
 
-*Note: 2e and 2f are exploratory — I need to see the distribution before deciding whether to use them for edge construction. They may be too ubiquitous (creating noise) or they may represent meaningful groupings.*
+*Note: 3e and 3f are exploratory — I need to see the distribution before deciding whether to use them for edge construction. They may be too ubiquitous (creating noise) or they may represent meaningful groupings.*
 
-## Step 3: Dependency Lookups
+## Step 4: Dependency Lookups
 
-Using the tables from Step 2, build three summary lookup tables:
+Using the tables from Step 3, build three summary lookup tables:
 
-### 3a. Asset Dependency Lookup
+### 4a. Asset Dependency Lookup
 For each unique application, vendor, and model, list:
 - Asset Name
 - Asset Type (application / vendor / model)
@@ -87,7 +106,7 @@ For each unique application, vendor, and model, list:
 
 Sort by count descending within each asset type.
 
-### 3b. Entity Dependency Profile
+### 4b. Entity Dependency Profile
 For each entity, summarize:
 - Entity ID
 - Entity Name
@@ -103,7 +122,7 @@ For each entity, summarize:
 
 Sort by total relationship count descending.
 
-### 3c. Concentration Flags
+### 4c. Concentration Flags
 Flag any asset (application, vendor, or model) that has 10 or more dependent entities. For each flagged asset, list:
 - Asset Name
 - Asset Type
@@ -111,7 +130,7 @@ Flag any asset (application, vendor, or model) that has 10 or more dependent ent
 - Dependent Entity IDs
 - Business units affected
 
-## Step 4: PRSA & Policy Distribution Analysis
+## Step 5: PRSA & Policy Distribution Analysis
 
 For both the Entity-PRSA and Entity-Policy tables, I need to understand the distribution before deciding whether to use them as edges:
 
@@ -132,7 +151,7 @@ For both the Entity-PRSA and Entity-Policy tables, I need to understand the dist
 - Total edges that would be generated if ALL policies were used as edges
 - Recommendation: given the distributions, are either of these worth using as edge types, or should they remain metadata filters only?
 
-## Step 5: Validation
+## Step 6: Validation
 
 Report:
 - Row counts for every table created
@@ -145,14 +164,15 @@ Report:
 
 Provide all tables as separate sheets in a single Excel workbook:
 1. Nodes
-2. Handoffs
-3. Entity-Application (with primary/secondary designation)
-4. Entity-Vendor (with primary/secondary designation)
-5. Entity-Model
-6. Entity-PRSA (Exploratory)
-7. Entity-Policy (Exploratory)
-8. Asset Dependency Lookup
-9. Entity Dependency Profile
-10. Concentration Flags
-11. PRSA & Policy Distribution Analysis
-12. Validation & Standardization Log
+2. Risk Map
+3. Handoffs
+4. Entity-Application (with primary/secondary designation)
+5. Entity-Vendor (with primary/secondary designation)
+6. Entity-Model
+7. Entity-PRSA (Exploratory)
+8. Entity-Policy (Exploratory)
+9. Asset Dependency Lookup
+10. Entity Dependency Profile
+11. Concentration Flags
+12. PRSA & Policy Distribution Analysis
+13. Validation & Standardization Log
