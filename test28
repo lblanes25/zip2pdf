@@ -1,0 +1,160 @@
+# Prompt: Layer 1 — Parse Audit Universe Into Dependency Tables
+
+Upload your trimmed CSV alongside this prompt. The CSV should contain only these columns from the "Archer Data Set" sheet:
+
+**Identity/grouping:** Entity ID, Entity Name, Entity Type, Entity Status, Business Unit, Line of Defense, Subsidiary Bank, Tab IV: Subsidiary, Audit Leader, PGA/ASL
+
+**Edge columns:** Hand-offs from Other Audit Entities, Hand-offs to Other Audit Entities, Hand-off Description, PRIMARY IT APPLICATIONS, SECONDARY IT APPLICATIONS, PRIMARY TLM THIRD PARTY ENGAGEMENT(S), SECONDARY TLM THIRD PARTY ENGAGEMENT(S), Models, PRSA, POLICIES/STANDARDS/PROCEDURES
+
+**Risk assessment:** All 14 risk assessment columns (include exact column names as they appear in the file)
+
+---
+
+I've uploaded a CSV of our audit universe — one row per auditable entity. I need you to parse it into clean relational tables that will serve as the data foundation for audit planning and network analysis.
+
+## Filtering
+
+Before starting, remove:
+- Entities where Entity Type indicates a special/one-time review
+- Entities where Entity Status is inactive
+
+Report how many entities were removed by each filter and how many remain.
+
+## Step 1: Node Table
+
+Create a table called **Nodes** — one row per remaining entity:
+- Entity ID
+- Entity Name
+- Business Unit
+- Line of Defense
+- Subsidiary Bank
+- Audit Leader
+- PGA/ASL
+- Horizontal Flag — mark as "horizontal" if the entity is a cross-cutting function (e.g., AML, IT, Compliance, Data Privacy, Outsourcing, Vendor Management). Otherwise "vertical."
+
+## Step 2: Risk Map
+
+Create a table called **Risk Map** — one row per entity-risk combination where the risk is assessed as present/applicable (exclude blanks and N/A):
+- Entity ID
+- Risk Name (the column header)
+- Risk Assessment Value (the cell value)
+
+## Step 3: Relational Tables
+
+Split multi-value cells and create one table per relationship type. For each table, standardize naming: if the same value appears with different spellings, capitalization, or formatting, unify them. Document every standardization decision you make in a separate log.
+
+### 3a. Handoffs
+- Source Entity ID
+- Target Entity ID
+- Direction: "to" (from Hand-offs to Other Audit Entities column) or "from" (from Hand-offs from Other Audit Entities column)
+- Flag any target/source IDs that don't match an entity in the Nodes table
+
+### 3b. Entity-Application
+- Entity ID
+- Application Name
+- Combine PRIMARY IT APPLICATIONS and SECONDARY IT APPLICATIONS into a single deduplicated list per entity (the primary/secondary split is unreliable — same values appear in both)
+
+### 3c. Entity-Vendor
+- Entity ID
+- Third Party Name
+- Combine PRIMARY and SECONDARY TLM THIRD PARTY ENGAGEMENT(S) into a single deduplicated list per entity (same issue)
+
+### 3d. Entity-Model
+- Entity ID
+- Model Name
+
+### 3e. Entity-PRSA (Exploratory)
+- Entity ID
+- PRSA value
+- Split from: PRSA column
+
+### 3f. Entity-Policy (Exploratory)
+- Entity ID
+- Policy/Standard ID or Name
+- Split from: POLICIES/STANDARDS/PROCEDURES column
+- Normalize ID formats (spaces vs. underscores)
+
+*Note: 3e and 3f are exploratory — I need to see the distribution before deciding whether to use them for edge construction. They may be too ubiquitous (creating noise) or they may represent meaningful groupings.*
+
+## Step 4: Dependency Lookups
+
+Using the tables from Step 3, build three summary lookup tables:
+
+### 4a. Asset Dependency Lookup
+For each unique application, vendor, and model, list:
+- Asset Name
+- Asset Type (application / vendor / model)
+- Count of dependent entities
+- List of dependent Entity IDs
+- Business units represented among dependent entities
+
+Sort by count descending within each asset type.
+
+### 4b. Entity Dependency Profile
+For each entity, summarize:
+- Entity ID
+- Entity Name
+- Count of handoff-to connections
+- Count of handoff-from connections
+- Count of applications
+- Count of vendors
+- Count of models
+- Total relationship count (sum of all above)
+- List of handoff partner Entity IDs
+
+Sort by total relationship count descending.
+
+### 4c. Concentration Flags
+Flag any asset (application, vendor, or model) that has 10 or more dependent entities. For each flagged asset, list:
+- Asset Name
+- Asset Type
+- Count of dependent entities
+- Dependent Entity IDs
+- Business units affected
+
+## Step 5: PRSA & Policy Distribution Analysis
+
+For both the Entity-PRSA and Entity-Policy tables, I need to understand the distribution before deciding whether to use them as edges:
+
+**For each unique PRSA value:**
+- Count of entities sharing that value
+- If I made every entity pair sharing this PRSA an edge, how many edges would it produce? (use formula: n*(n-1)/2)
+- List the entity IDs
+
+**For each unique Policy/Standard:**
+- Count of entities sharing that value
+- Edge count if used (same formula)
+- List the entity IDs
+
+**Summary:**
+- Total unique PRSA values vs. total unique policies
+- Distribution: how many PRSAs/policies have 1-5 entities? 6-15? 16-50? 50+?
+- Total edges that would be generated if ALL PRSAs were used as edges
+- Total edges that would be generated if ALL policies were used as edges
+- Recommendation: given the distributions, are either of these worth using as edge types, or should they remain metadata filters only?
+
+## Step 6: Validation
+
+Report:
+- Row counts for every table created
+- Unmatched handoff references (list all AE IDs that appear in handoffs but not in the Nodes table)
+- Per-table: count of unique values and top 10 most common values by entity count
+- Entities with zero relationships of any type across all tables (truly isolated — no handoffs, no apps, no vendors, no models)
+- Full standardization log: every name merge or normalization decision made, showing original values and standardized value
+
+## Output
+
+Provide all tables as separate sheets in a single Excel workbook:
+1. Nodes
+2. Risk Map
+3. Handoffs
+4. Entity-Application
+5. Entity-Vendor
+6. Entity-Model
+7. Entity-PRSA (Exploratory)
+8. Entity-Policy (Exploratory)
+9. Asset Dependency Lookup
+10. Entity Dependency Profile
+11. Concentration Flags
+12. PRSA & Policy Distribution Analysis
+13. Validation & Standardization Log
