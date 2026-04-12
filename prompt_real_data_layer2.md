@@ -1,13 +1,16 @@
 # Prompt: Layer 2 — Coverage Matrix & Gap Analysis (Production Run)
 
-I've uploaded two files:
-1. The Layer 1 output workbook from the prior step (14 sheets of parsed audit universe data)
-2. A list of Entity IDs that are in-scope for the current audit cycle
+I've uploaded three files:
+1. The Layer 1 output workbook (14 sheets of parsed audit universe data)
+2. The Edge Derivation output workbook (Master Edge List, High Frequency Shared Values, Summary Statistics)
+3. A list of Entity IDs that are in-scope for the current audit cycle
 
 I need you to build a coverage matrix that answers three questions:
 - Where are the coverage gaps when we account for how entities connect?
 - Where does concentration risk create uncovered exposure?
 - Where does an entity's connectivity suggest its audit frequency should be reconsidered?
+
+**CRITICAL: Exclude shared_model edges from all connectivity counts and coverage flags.** Models are too dense — a small group of model-heavy entities shares many models, generating ~9,900 edges that distort the network. Models are analyzed separately as concentration risk (Step 4), not as pairwise connections. Only use these edge types for connectivity: handoff_to, handoff_from, shared_app, shared_vendor, shared_prsa.
 
 ---
 
@@ -28,16 +31,16 @@ For each entity in the Nodes table, create one row with:
 - Days Since Last Audit
 - Overdue (Yes/No)
 
-**Connection Counts (unweighted, by type):**
+**Connection Counts (unweighted, by type — from Master Edge List, excluding shared_model):**
 - Handoff-to count
 - Handoff-from count
-- Primary application count
-- Secondary application count
-- Primary vendor count
-- Secondary vendor count
-- Model count
-- PRSA count
-- Total connection count
+- Shared application count
+- Shared vendor count
+- Shared PRSA count
+- **Connectivity Total** (sum of above — this drives all coverage flags)
+
+**Model Exposure (informational, not included in connectivity total):**
+- Model count (from Entity-Model table in Layer 1 workbook — number of models this entity uses, NOT pairwise edges)
 
 **Risk Profile:**
 - Count of risks rated High or Critical (residual)
@@ -46,7 +49,7 @@ For each entity in the Nodes table, create one row with:
 - Highest individual residual risk rating across all 14 risks
 - List of risks rated High or Critical (names)
 
-Sort by total connection count descending.
+Sort by Connectivity Total descending.
 
 ---
 
@@ -58,10 +61,10 @@ Generate flags for the following conditions. Each flag should include: Flag Type
 Find groups of 5+ entities connected by handoffs where NONE are in the current audit plan. List the group, their handoff connections, and their risk profiles.
 
 ### Flag 2: OVERDUE + HIGHLY CONNECTED (HIGH)
-Entities that are overdue AND in the top quartile of total connection count. These are the highest priority gaps — entities at the center of the network that haven't been audited within their required frequency.
+Entities that are overdue AND in the top quartile of Connectivity Total (excluding models). These are the highest priority gaps — entities at the center of the network that haven't been audited within their required frequency.
 
 ### Flag 3: CONCENTRATION ASSET — ZERO COVERAGE (HIGH)
-Vendors, applications, or models with 10+ dependent entities where NO dependent entity is in the current audit plan. Include: asset name, asset type, dependent entity count, and dependent entity IDs.
+Vendors, applications, or **models** with 10+ dependent entities where NO dependent entity is in the current audit plan. Include: asset name, asset type, dependent entity count, and dependent entity IDs. Models are especially important here — they were excluded from connectivity counts because of density, but concentration risk on specific models is still a real exposure.
 
 ### Flag 4: PRIMARY CONTROL OWNER NOT IN PLAN (HIGH)
 For concentration assets (10+ dependent entities), check whether the primary entity (the one that owns/tests the controls) is in the audit plan. If not, flag it — secondary entities are relying on controls nobody is verifying this cycle.
@@ -77,7 +80,7 @@ These entities may be more important than their standalone rating suggests.
 Entities with at least one risk rated High/Critical residual AND Insufficiently/Partially Controlled, that are not in the current plan.
 
 ### Flag 7: FREQUENCY OVERRIDE ON CONNECTED ENTITY (LOW)
-Entities whose audit frequency was overridden AND that are in the top quartile of connection count. These overrides may not have accounted for connectivity.
+Entities whose audit frequency was overridden AND that are in the top quartile of Connectivity Total (excluding models). These overrides may not have accounted for connectivity.
 
 ---
 
@@ -91,19 +94,19 @@ Provide a summary table with:
 - Overdue entities (count)
 - Overdue and not in plan (count)
 
-**Connectivity-Adjusted:**
-- Top 20 most connected entities: how many are in scope?
-- Top 10 most connected entities: how many are in scope?
+**Connectivity-Adjusted (excluding model edges):**
+- Top 20 most connected entities by Connectivity Total: how many are in scope?
+- Top 10 most connected entities by Connectivity Total: how many are in scope?
 - Horizontal (cross-cutting) entities: how many are in scope?
 
-**Concentration:**
+**Concentration (including models):**
 - Total concentration assets (10+ dependent entities)
 - Concentration assets with zero audit coverage
 - Concentration assets where primary control owner is not in plan
 
 **Risk:**
 - Entities with High/Critical residual + weak controls: total count, count not in plan
-- Average connection count of High/Critical risk entities vs. Low risk entities
+- Average Connectivity Total of High/Critical risk entities vs. Low risk entities
 
 **Flags:**
 - Total flags generated by type and priority
@@ -112,7 +115,7 @@ Provide a summary table with:
 
 ## Step 4: Concentration Risk Detail
 
-For each concentration asset (10+ dependent entities), provide:
+For each concentration asset (10+ dependent entities) — **including models, vendors, and applications** — provide:
 - Asset Name
 - Asset Type
 - Dependent entity count
