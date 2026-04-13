@@ -1,0 +1,16 @@
+Make these changes to the visualization:
+Change node encoding:
+
+Color = Overall Residual Risk Rating: Red (#c0392b) for Critical, Orange (#e67e22) for High, Yellow (#f1c40f) for Medium, Green (#27ae60) for Low, Gray (#95a5a6) for N/A or unknown
+Shape = Audit plan status: Circle = In Scope This Year, Diamond = Not In Scope This Year. Add a thick dark border on diamonds that are also Overdue.
+Size = Connectivity Total (same as before)
+
+Add a new filter mode: "Application/Vendor Focus." Add a searchable dropdown that lists all applications and vendors from the Asset Dependency Lookup. When the user selects an asset:
+
+Show ONLY the entities that depend on that asset
+Highlight the primary entity (the one that owns/tests the controls) with a distinct marker — a star or double border — so it's immediately identifiable
+Show all handoff edges between the visible entities
+In the panel, show: Asset Name, Asset Type, total dependent entity count, primary entity ID and name, count in scope vs. not in scope, count by risk rating
+
+This lets me select a vendor or application and immediately see: who depends on it, who owns the controls, what are the risk ratings, and who's being audited.
+Update the legend to reflect the new encoding.
