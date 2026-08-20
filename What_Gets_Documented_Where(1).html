@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>What gets documented where</title>
+<style>
+  :root{
+    --paper:#FCFCFD; --ink:#1A2233; --ink-soft:#5A6478; --ink-faint:#9AA3B2;
+    --rule:#DFE3E8; --rule-strong:#B9C0CB; --navy:#1F3864;
+    --keep:#2F6B4F; --defer:#9A6B15; --wash:#F3F5F8; --amber:#FDF6E6;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;
+       line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto;padding:40px 32px 72px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;
+           color:var(--ink-faint);margin:0 0 10px}
+  h1{font-family:var(--serif);font-size:32px;line-height:1.15;font-weight:400;margin:0 0 12px}
+  .standfirst{max-width:74ch;color:var(--ink-soft);font-size:16px;margin:0 0 28px}
+
+  .boxes{display:grid;grid-template-columns:repeat(4,1fr);gap:0;border:1px solid var(--rule-strong);
+         background:#fff;margin-bottom:10px}
+  .box{padding:16px 16px 18px;border-right:1px solid var(--rule)}
+  .box:last-child{border-right:0}
+  .box .n{font-family:var(--mono);font-size:10px;letter-spacing:.13em;text-transform:uppercase;
+          color:var(--ink-faint);margin-bottom:6px}
+  .box h2{font-family:var(--serif);font-size:19px;font-weight:400;color:var(--navy);margin:0 0 3px;line-height:1.2}
+  .box .sys{font-family:var(--mono);font-size:10.5px;letter-spacing:.06em;color:var(--defer);
+            text-transform:uppercase;margin-bottom:10px}
+  .box ul{margin:0;padding-left:16px}
+  .box li{font-size:13px;color:var(--ink-soft);margin:6px 0;line-height:1.4}
+  .box li b{color:var(--ink);font-weight:600}
+  .box .never{margin-top:12px;padding-top:10px;border-top:1px dashed var(--rule-strong);
+              font-size:12.3px;color:var(--ink-soft)}
+  .box .never b{display:block;font-family:var(--mono);font-size:9.5px;letter-spacing:.11em;
+                text-transform:uppercase;color:#9E3A31;margin-bottom:3px}
+  .flowline{display:flex;gap:8px;align-items:center;font-family:var(--mono);font-size:10.5px;
+            letter-spacing:.08em;text-transform:uppercase;color:var(--ink-faint);margin:0 0 32px}
+  .flowline span.a{color:var(--navy)}
+
+  h3.sec{font-family:var(--serif);font-size:23px;font-weight:400;margin:34px 0 6px;
+         border-top:2px solid var(--navy);padding-top:16px}
+  .lead{font-size:14.5px;color:var(--ink-soft);max-width:92ch;margin:0 0 16px}
+  .lead strong{color:var(--ink)}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;background:#fff}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.11em;text-transform:uppercase;
+     color:var(--ink-faint);text-align:left;font-weight:400;padding:8px 10px;
+     border-bottom:1px solid var(--rule-strong)}
+  td{padding:11px 10px;border-bottom:1px solid var(--rule);vertical-align:top;color:var(--ink-soft);
+     line-height:1.45}
+  td:first-child{color:var(--ink);font-weight:600;width:26%}
+  td b{color:var(--ink)}
+
+  .pair{display:grid;grid-template-columns:1fr 1fr;gap:0;border:1px solid var(--rule-strong);background:#fff}
+  .pair .h{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;
+           padding:9px 14px;border-bottom:1px solid var(--rule-strong)}
+  .pair .h.l{color:#9E3A31;border-right:1px solid var(--rule)}
+  .pair .h.r{color:var(--keep)}
+  .pair .c{padding:12px 14px;border-bottom:1px solid var(--rule);font-size:13.5px;color:var(--ink-soft)}
+  .pair .c.l{border-right:1px solid var(--rule);color:var(--ink-faint)}
+  .pair .c.r{color:var(--ink)}
+  .pair .c:nth-last-child(-n+2){border-bottom:0}
+
+  .note{margin-top:16px;background:var(--wash);border-left:3px solid var(--navy);padding:14px 17px;
+        font-size:14px;color:var(--ink-soft);max-width:96ch}
+  .note b{color:var(--ink)}
+  .amberbox{margin-top:14px;background:var(--amber);border-left:3px solid var(--defer);padding:14px 17px;
+            font-size:14px;color:var(--ink)}
+  .amberbox b{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+              text-transform:uppercase;color:var(--defer);margin-bottom:5px}
+
+  .dims{display:grid;grid-template-columns:repeat(3,1fr);gap:8px 14px;margin-top:14px;
+        background:var(--wash);border-left:3px solid var(--navy);padding:13px 16px;
+        font-size:13px;color:var(--ink-soft)}
+  .dims b{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--navy);margin-right:7px}
+
+  @media (max-width:1000px){
+    .boxes{grid-template-columns:1fr 1fr}
+    .box{border-bottom:1px solid var(--rule)}
+    .pair,.dims{grid-template-columns:1fr}
+  }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">Control test workpaper · pilot</p>
+  <h1>What gets documented where</h1>
+  <p class="standfirst">
+    Four primary homes. Each type of documentation has one clear primary location, with references
+    between them where needed — the control description lives in the record and is referenced by the
+    workpaper, not retyped into it. Most of the confusion in the new format is not about what to write;
+    it is about which of these four it belongs in.
+  </p>
+
+  <div class="boxes">
+    <div class="box">
+      <div class="n">Home 1</div>
+      <h2>Process Understanding</h2>
+      <div class="sys">Workstep · pilot: separate Word doc</div>
+      <ul>
+        <li><b>End-to-end process narrative</b> — how work flows, systems touched, hand-offs</li>
+        <li><b>The process walkthrough</b> itself</li>
+        <li><b>Coverage questions</b> — e.g. how G&amp;C knows every Gap was referred</li>
+        <li>Anything true of the process rather than of one control</li>
+      </ul>
+      <div class="never"><b>Not here</b>Judgments about whether a control is well designed.</div>
+    </div>
+
+    <div class="box">
+      <div class="n">Home 2</div>
+      <h2>Key Control record</h2>
+      <div class="sys">Optro · the RCM row</div>
+      <ul>
+        <li><b>Control description</b> — one control per record</li>
+        <li><b>Control objective</b></li>
+        <li><b>Risk linkage</b>, frequency, type, owner</li>
+        <li><b>The 5Ws &amp; H answers</b> — who performs it, what the criteria are, when it triggers</li>
+      </ul>
+      <div class="never"><b>Not here</b>The evaluation of whether those answers are good enough.</div>
+    </div>
+
+    <div class="box">
+      <div class="n">Home 3</div>
+      <h2>Control Test Workpaper</h2>
+      <div class="sys">Excel · one per control</div>
+      <ul>
+        <li><b>Section 3</b> — one instance walked, and the key attributes</li>
+        <li><b>Section 4</b> — the <i>evaluation</i> of the 5Ws &amp; H answers</li>
+        <li><b>Sections 5 &amp; 9</b> — justification for the conclusions</li>
+        <li><b>Sections 7–8</b> — population, sample, testing attributes, results</li>
+        <li><b>Evidence tab</b> — marked-up screenprints, tickmarked</li>
+      </ul>
+      <div class="never"><b>Not here</b>The conclusion words Effective / Ineffective.</div>
+    </div>
+
+    <div class="box">
+      <div class="n">Home 4</div>
+      <h2>The workstep</h2>
+      <div class="sys">Optro native fields</div>
+      <ul>
+        <li><b>Design conclusion</b> — Effective / Ineffective</li>
+        <li><b>Operating effectiveness conclusion</b></li>
+        <li><b>Issues raised</b>, against the specific control affected</li>
+        <li>GenAI questions</li>
+      </ul>
+      <div class="never"><b>Not here</b>The reasoning. That lives in Sections 5 and 9 of the workpaper.</div>
+    </div>
+  </div>
+
+  <div class="flowline">
+    <span class="a">Process</span><span>→</span><span class="a">Control record</span><span>→</span>
+    <span class="a">Workpaper</span><span>→</span><span class="a">Workstep</span>
+    <span style="margin-left:12px;text-transform:none;letter-spacing:0;font-family:var(--sans);font-size:13px">
+      Each one assumes the one before it is done.</span>
+  </div>
+
+  <h3 class="sec">The two splits people get wrong</h3>
+  <p class="lead">Both of these sit on the boundary between Home 2 and Home 3, and both are stated in the
+    template's guidance boxes — just never in one place.</p>
+
+  <table>
+    <thead><tr><th>The content</th><th>Answers live in</th><th>Evaluation lives in</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>The 5Ws &amp; H</td>
+        <td><b>Key Control record.</b> Who performs the control, what is assessed and against which
+          criteria, when it triggers, where it sits, how it is evidenced. These are facts about the
+          control.</td>
+        <td><b>Workpaper Section 4, Assessment Rationale.</b> Whether those answers are sufficient given
+          the risk. This is judgment, and it is the actual work of design testing.</td>
+      </tr>
+      <tr>
+        <td>The conclusion</td>
+        <td><b>The workstep.</b> Effective or Ineffective, design and operating effectiveness separately.
+          Nothing else is a valid design conclusion — there is no "partially effective."</td>
+        <td><b>Workpaper Sections 5 and 9.</b> Why that conclusion holds, including why any Fail was
+          overridden or why exceptions still support an effective conclusion.</td>
+      </tr>
+      <tr>
+        <td>The process</td>
+        <td><b>Process Understanding workstep</b> (pilot: attached Word document). Referenced from
+          Section 3 of the workpaper by link, not restated.</td>
+        <td><b>Nowhere in the workpaper.</b> Section 3 records one instance of one control. If you are
+          writing paragraphs about how the process works, the content is in the wrong home.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="dims">
+    <div><b>WHY</b>Risk linkage</div>
+    <div><b>WHO</b>Performer — authority, SoD, override</div>
+    <div><b>WHAT</b>The activity — criteria and thresholds</div>
+    <div><b>WHERE</b>Placement — right point in the process</div>
+    <div><b>WHEN</b>Cadence or trigger</div>
+    <div><b>HOW</b>Information and evidence — reperformance</div>
+  </div>
+  <p class="lead" style="margin-top:10px"><strong>WHERE is placement, not evidence location.</strong>
+    Where the evidence lives and whether someone could reperform from it is HOW. Swapping those two is
+    the most common error in a first draft.</p>
+
+  <h3 class="sec">How test steps get written now</h3>
+  <p class="lead"><strong>The attributes are the test steps.</strong> You write them once in Section 3
+    from the control description, they carry automatically to Section 8 for operating effectiveness, and
+    they carry to the evidence tab as tickmarks. There is no separate paragraph of test-step verbiage to
+    argue about — the Testing Overview states the intent of the test in two or three sentences, and the
+    attributes do the rest.</p>
+
+  <div class="pair">
+    <div class="h l">Too broad to test</div>
+    <div class="h r">Specific enough to test</div>
+
+    <div class="c l">Gap was appropriately assessed and the resulting determination was reasonable and
+      supported.</div>
+    <div class="c r">The assessment documents the applicable enterprise requirement criteria —
+      [policy, version] — that were applied in reaching the determination.</div>
+
+    <div class="c l">Review and challenge was performed in accordance with enterprise requirements.</div>
+    <div class="c r">Required review and challenge is performed by [reviewer role] before the
+      determination is finalized, and the reviewer's conclusion is evidenced.</div>
+
+    <div class="c l">Information recorded in the system of record was complete, accurate and timely.</div>
+    <div class="c r">The determination is recorded in [system] within [required timeframe] of
+      finalization.<br>The recorded information agrees to the Gap Intake Form, supporting documentation
+      and review outcome.<br>All [required fields] are complete.</div>
+  </div>
+
+  <div class="note">
+    <b>The test for an attribute:</b> could a colleague on another team test it without asking you what it
+    means? If the answer is no, the missing piece is almost always a named criterion, a named role, a
+    named system, or a named timeframe — the four things in brackets above. Those brackets are not
+    placeholders to be tidied up later. They are the agenda for the walkthrough.
+  </div>
+
+  <div class="amberbox">
+    <b>Why one broad step became three</b>
+    "Complete, accurate and timely" is three different failures with three different causes, and a single
+    C or X in the sample grid cannot tell a reviewer which one occurred. Splitting them is not more
+    testing — it is the same testing, marked in a way that survives review.
+  </div>
+
+  <h3 class="sec">One control per workpaper</h3>
+  <p class="lead">This is the constraint that makes everything above work. One design conclusion cannot
+    cover an assessment that was right and a system entry that was late, so if the control record
+    describes several activities, the workpaper cannot conclude cleanly on any of them.</p>
+  <p class="lead"><strong>The boundary has to be settled before the workpaper is finalized and testing is
+    executed — not before planning starts.</strong> Build the RCM row during planning with a preliminary
+    control hypothesis and the unresolved facts labelled, then refine it, or split it, once the
+    walkthrough establishes what the process actually does. A row that changes after the walkthrough is
+    the process working, not a planning error.</p>
+  <div class="note">
+    <b>Splitting means testing less per workpaper, not more testing overall.</b> The population and sample
+    can be shared: validate once, reference the workstep from the second control, and complete only the
+    testing attributes and results there. What cannot be shared is the conclusion. Each control gets its
+    own design conclusion, its own operating-effectiveness conclusion, and any issue is raised against the
+    specific control it affects.
+  </div>
+
+</div>
+</body>
+</html>

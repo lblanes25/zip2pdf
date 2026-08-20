@@ -1,0 +1,722 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Control Testing Walkthrough — from today to the new format</title>
+<style>
+  :root{
+    --paper:#FCFCFD; --ink:#1A2233; --ink-soft:#5A6478; --ink-faint:#9AA3B2;
+    --rule:#DFE3E8; --rule-strong:#B9C0CB; --navy:#1F3864;
+    --keep:#2F6B4F; --defer:#9A6B15; --drop:#9E3A31; --wash:#F3F5F8; --amber:#FDF6E6;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);
+       font-size:16px;line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1240px;margin:0 auto;padding:44px 32px 80px}
+
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;
+           text-transform:uppercase;color:var(--ink-faint);margin:0 0 10px}
+  h1{font-family:var(--serif);font-size:34px;line-height:1.15;font-weight:400;
+     margin:0 0 12px;letter-spacing:-.01em}
+  .standfirst{max-width:66ch;color:var(--ink-soft);font-size:16.5px;margin:0 0 26px}
+  .chain{font-family:var(--mono);font-size:12.5px;color:var(--ink-soft);
+         border-top:1px solid var(--rule);border-bottom:1px solid var(--rule);
+         padding:11px 0;margin-bottom:22px;display:flex;flex-wrap:wrap;gap:6px 14px}
+  .chain b{color:var(--navy);font-weight:600}
+  .chain .sep{color:var(--ink-faint)}
+
+  /* persistent assumptions strip */
+  .assume{background:var(--amber);border-left:3px solid var(--defer);
+          padding:14px 18px;margin-bottom:30px;font-size:14.5px;color:var(--ink)}
+  .assume b{display:block;font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+            text-transform:uppercase;color:var(--defer);margin-bottom:6px}
+  .assume ol{margin:8px 0 0;padding-left:20px}
+  .assume li{margin-bottom:4px}
+  .assume em{font-style:normal;color:var(--ink-soft)}
+
+  .stages{display:flex;border:1px solid var(--rule-strong);border-radius:3px;
+          overflow:hidden;margin-bottom:8px;width:fit-content}
+  .stages button{appearance:none;background:transparent;border:0;
+                 border-right:1px solid var(--rule-strong);padding:9px 20px;
+                 font-family:var(--mono);font-size:12px;letter-spacing:.09em;
+                 text-transform:uppercase;color:var(--ink-soft);cursor:pointer;
+                 transition:background .16s,color .16s}
+  .stages button:last-child{border-right:0}
+  .stages button:hover{background:var(--wash)}
+  .stages button[aria-selected="true"]{background:var(--navy);color:#fff}
+  .stages button:focus-visible{outline:2px solid var(--navy);outline-offset:-2px}
+  .stage-note{font-size:14.5px;color:var(--ink-soft);margin:0 0 24px;
+              min-height:3.2em;max-width:78ch}
+
+  .ledger{border-top:2px solid var(--navy)}
+  .colhead{display:grid;gap:0;font-family:var(--mono);font-size:10.5px;
+           letter-spacing:.13em;text-transform:uppercase;color:var(--ink-faint);
+           padding:9px 0 8px;border-bottom:1px solid var(--rule)}
+  .colhead.s0{grid-template-columns:34px 1fr 230px}
+  .colhead.s1{grid-template-columns:34px 1fr 96px 1fr 190px}
+  .colhead.s2{grid-template-columns:34px 1fr 230px}
+  .colhead span:last-child{text-align:right;padding-right:2px}
+
+  .row{display:grid;align-items:start;border-bottom:1px solid var(--rule);
+       padding:16px 0;transition:opacity .3s ease}
+  .row.s0{grid-template-columns:34px 1fr 230px}
+  .row.s1{grid-template-columns:34px 1fr 96px 1fr 190px}
+  .row.s2{grid-template-columns:34px 1fr 230px}
+  .row.is-hidden,.colhead.is-hidden{display:none}
+  .row.is-muted{opacity:.5}
+
+  .mark{font-family:var(--mono);font-size:14px;font-weight:600;padding-top:1px}
+  .mark[data-m="keep"]{color:var(--keep)}
+  .mark[data-m="defer"]{color:var(--defer)}
+  .mark[data-m="drop"]{color:var(--drop)}
+  .mark[data-m="none"]{color:var(--ink-faint)}
+
+  .id{font-family:var(--mono);font-size:11px;letter-spacing:.06em;color:var(--ink-faint);
+      display:block;margin-bottom:3px}
+  .name{font-size:16px;font-weight:600;line-height:1.35;margin:0 0 5px;padding-right:24px}
+  .desc{font-size:14px;color:var(--ink-soft);margin:0;padding-right:24px;max-width:70ch}
+  .verdict{font-family:var(--mono);font-size:19px;font-weight:700;text-align:center;
+           padding-top:2px}
+  .verdict[data-v="yes"]{color:var(--keep)}
+  .verdict[data-v="no"]{color:var(--drop)}
+  .disp{font-family:var(--mono);font-size:11px;letter-spacing:.09em;text-transform:uppercase;
+        text-align:right;padding-right:2px;line-height:1.6}
+  .disp[data-m="keep"]{color:var(--keep)}
+  .disp[data-m="defer"]{color:var(--defer)}
+  .disp[data-m="none"]{color:var(--ink-faint)}
+  .disp small{display:block;text-transform:none;letter-spacing:0;font-size:11px;
+              color:var(--ink-faint);margin-top:3px;line-height:1.45}
+
+  .attrs{margin:9px 0 0;padding:0 24px 0 0;list-style:none;border-left:2px solid var(--rule)}
+  .attrs li{font-size:13.5px;color:var(--ink-soft);padding:3px 0 3px 13px;display:flex;gap:9px}
+  .attrs .n{font-family:var(--mono);font-size:11px;color:var(--ink-faint);flex:0 0 14px}
+
+  .conditional{margin-top:22px;border:1px dashed var(--defer);border-radius:4px;
+               padding:16px 18px;background:var(--amber)}
+  .conditional .lab{font-family:var(--mono);font-size:11px;letter-spacing:.12em;
+                    text-transform:uppercase;color:var(--defer);margin-bottom:8px}
+
+  .question{margin-top:34px;border-top:2px solid var(--navy);padding-top:20px}
+  .question h2{font-family:var(--serif);font-size:21px;font-weight:400;margin:0 0 6px}
+  .question .big{font-family:var(--serif);font-size:24px;line-height:1.35;color:var(--navy);
+                 margin:14px 0 16px;max-width:60ch}
+  .question .sub{font-size:14.5px;color:var(--ink-soft);max-width:76ch;margin:0 0 10px}
+
+  .decide{margin-top:30px;border-top:1px solid var(--rule);padding-top:18px}
+  .decide table{border-collapse:collapse;width:100%;font-size:14px}
+  .decide th{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+             text-transform:uppercase;color:var(--ink-faint);text-align:left;
+             padding:0 12px 8px 0;font-weight:400}
+  .decide td{padding:11px 12px 11px 0;border-top:1px solid var(--rule);vertical-align:top}
+  .decide tr.now td{background:#F1F6F2}
+  .decide .out{font-family:var(--serif);font-size:17px;font-weight:700;white-space:nowrap}
+  .decide .out.now{color:var(--keep)}
+  .decide .out.alt{color:var(--ink-faint)}
+
+  .ask{margin-top:34px;background:var(--wash);border-left:3px solid var(--navy);
+       padding:16px 20px;font-size:14.5px;color:var(--ink-soft);max-width:88ch}
+  .ask b{color:var(--ink)}
+
+  .roadmap{display:grid;grid-template-columns:repeat(6,1fr);border:1px solid var(--rule);
+           margin:0 0 24px;background:#fff}
+  .roadmap .step{padding:12px 14px;border-right:1px solid var(--rule);font-size:12.5px;line-height:1.35;color:var(--ink-soft)}
+  .roadmap .step:last-child{border-right:0}
+  .roadmap .num{display:block;font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--navy);margin-bottom:4px}
+  .roadmap strong{color:var(--ink);font-weight:600}
+
+  .teaching{margin:14px 0 26px;border-left:3px solid var(--navy);background:var(--wash);padding:13px 16px;font-size:14px;color:var(--ink-soft);max-width:92ch}
+  .teaching strong{color:var(--ink)}
+
+  .rules{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:16px 0 2px}
+  .rulecard{border:1px solid var(--rule);padding:13px 15px;background:#fff}
+  .rulecard .lab{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--navy);margin-bottom:5px}
+  .rulecard p{margin:0;font-size:13.5px;color:var(--ink-soft)}
+  .rulecard strong{color:var(--ink)}
+
+  .bridge{margin-top:22px;border:1px solid var(--rule-strong);padding:16px 18px;background:#fff}
+  .bridge .lab{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--navy);margin-bottom:9px}
+  .bridgegrid{display:grid;grid-template-columns:1fr 52px 1fr;gap:10px;align-items:center}
+  .bridgebox{background:var(--wash);padding:11px 13px;font-size:13.5px;color:var(--ink-soft)}
+  .bridgebox strong{color:var(--ink)}
+  .branchintro{margin-top:18px;padding:13px 15px;border-left:3px solid var(--navy);background:var(--wash);font-size:13.5px;color:var(--ink-soft)}
+  .branchintro strong{color:var(--ink)}
+  .branches{display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-top:14px}
+  .branchcard{border:1px solid var(--rule-strong);background:#fff;padding:15px 16px;min-height:100%}
+  .branchcard .branchnum{font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin-bottom:5px}
+  .branchcard h3{font-family:var(--serif);font-size:20px;font-weight:400;margin:0 0 7px;color:var(--navy)}
+  .branchcard .when{font-size:13px;color:var(--ink-soft);margin:0 0 10px}
+  .branchcard ul{margin:8px 0 0;padding-left:18px}
+  .branchcard li{font-size:12.8px;color:var(--ink-soft);margin:4px 0}
+  .branchcard strong{color:var(--ink)}
+  .arrow{text-align:center;font-family:var(--mono);font-size:18px;color:var(--navy)}
+
+
+  .crosswalk{margin-top:22px;border-top:2px solid var(--navy);padding-top:16px}
+  .crosswalk h2{font-family:var(--serif);font-size:22px;font-weight:400;margin:0 0 5px}
+  .crosswalk .lead{font-size:14.5px;color:var(--ink-soft);max-width:90ch;margin:0 0 15px}
+  .crosswalk table{width:100%;border-collapse:collapse;font-size:13px;background:#fff}
+  .crosswalk th{font-family:var(--mono);font-size:10px;letter-spacing:.11em;text-transform:uppercase;color:var(--ink-faint);text-align:left;font-weight:400;padding:8px 10px;border-bottom:1px solid var(--rule-strong);vertical-align:bottom}
+  .crosswalk td{padding:11px 10px;border-bottom:1px solid var(--rule);vertical-align:top;color:var(--ink-soft);line-height:1.42}
+  .crosswalk td:first-child{color:var(--ink);font-weight:600;width:20%}
+  .crosswalk td:nth-child(2){width:28%}
+  .crosswalk td:nth-child(3){width:27%}
+  .crosswalk td:nth-child(4){width:25%}
+  .crosswalk strong{color:var(--ink)}
+  .tag{display:inline-block;font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;padding:2px 6px;border:1px solid var(--rule-strong);border-radius:2px;margin:0 4px 3px 0;color:var(--navy);background:var(--wash)}
+  .status{font-family:var(--mono);font-size:10px;letter-spacing:.08em;text-transform:uppercase;font-weight:600}
+  .status.keep{color:var(--keep)} .status.move{color:var(--defer)} .status.absorb{color:var(--navy)}
+  .crossnote{display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:14px}
+  .crossnote>div{padding:12px 14px;background:var(--wash);border-left:3px solid var(--navy);font-size:13.5px;color:var(--ink-soft)}
+  .crossnote strong{display:block;margin-bottom:3px}
+  .dimlegend{display:grid;grid-template-columns:repeat(3,1fr);gap:6px 12px;margin:0 0 14px;
+             padding:11px 13px;background:var(--wash);border-left:3px solid var(--navy);
+             font-size:12.5px;color:var(--ink-soft)}
+  .dimlegend b{font-family:var(--mono);font-size:10.5px;letter-spacing:.1em;color:var(--navy);margin-right:6px}
+
+  .ready{margin-top:26px;border-top:2px solid var(--navy);padding-top:18px}
+  .ready h2{font-family:var(--serif);font-size:21px;font-weight:400;margin:0 0 6px}
+  .ready .lead{font-size:14.5px;color:var(--ink-soft);max-width:80ch;margin:0 0 13px}
+  .readygrid{display:grid;grid-template-columns:repeat(3,1fr);gap:10px}
+  .readyitem{border-top:1px solid var(--rule);padding:9px 10px 2px 0;font-size:13.5px;color:var(--ink-soft)}
+  .readyitem strong{display:block;color:var(--ink);font-size:13px;margin-bottom:2px}
+
+
+
+  .rcmview{margin-top:22px;border-top:2px solid var(--navy);padding-top:16px}
+  .rcmview h2{font-family:var(--serif);font-size:22px;font-weight:400;margin:0 0 5px}
+  .rcmview .lead{font-size:14.5px;color:var(--ink-soft);max-width:94ch;margin:0 0 16px}
+  .rcmflow{display:flex;flex-wrap:wrap;gap:8px;align-items:center;margin:10px 0 18px;font-family:var(--mono);font-size:11px;text-transform:uppercase;letter-spacing:.07em}
+  .rcmflow .step{border:1px solid var(--rule-strong);padding:7px 9px;background:#fff;color:var(--ink-soft)}
+  .rcmflow .step strong{color:var(--navy)}
+  .rcmflow .arr{color:var(--ink-faint)}
+  .rcmblock{margin:18px 0 24px}
+  .rcmblock h3{font-family:var(--serif);font-size:19px;font-weight:400;margin:0 0 5px;color:var(--navy)}
+  .rcmblock .hint{font-size:13.5px;color:var(--ink-soft);margin:0 0 10px;max-width:95ch}
+  .rcmtablewrap{overflow-x:auto;border:1px solid var(--rule-strong);background:#fff}
+  .rcmtable{border-collapse:collapse;width:100%;min-width:1180px;font-size:12.5px}
+  .rcmtable th{position:sticky;top:0;background:var(--wash);font-family:var(--mono);font-size:9.8px;letter-spacing:.09em;text-transform:uppercase;color:var(--ink-faint);font-weight:400;text-align:left;padding:8px 9px;border-right:1px solid var(--rule);border-bottom:1px solid var(--rule-strong);vertical-align:bottom}
+  .rcmtable td{padding:10px 9px;border-right:1px solid var(--rule);border-bottom:1px solid var(--rule);vertical-align:top;color:var(--ink-soft);line-height:1.38;min-width:120px}
+  .rcmtable tr:last-child td{border-bottom:0}
+
+  @media (max-width:1000px){
+    .roadmap{grid-template-columns:repeat(2,1fr)}
+    .roadmap .step{border-bottom:1px solid var(--rule)}
+    .stages{flex-wrap:wrap;width:100%}
+    .readygrid{grid-template-columns:1fr 1fr}
+    .rules,.crossnote{grid-template-columns:1fr}
+    .bridgegrid{grid-template-columns:1fr}
+    .bridgegrid .arrow{display:none}
+  }
+  .rcmtable th:last-child,.rcmtable td:last-child{border-right:0}
+  .rcmtable td.ctrl{min-width:210px;color:var(--ink);font-weight:600}
+  .rcmtable td.long{min-width:320px}
+  .rcmtable td.test{min-width:360px}
+  .rcmtable td.status{min-width:145px}
+  .rcmtable .provisional{color:var(--defer);font-weight:600}
+  .rcmtable .confirmed{color:var(--keep);font-weight:600}
+  .rcmtable .shared{color:var(--navy);font-weight:600}
+  .rcmnote{margin:12px 0 0;padding:11px 13px;border-left:3px solid var(--defer);background:var(--amber);font-size:13.5px;color:var(--ink-soft);max-width:100ch}
+  .rcmnote strong{color:var(--ink)}
+  .scenariohead{font-family:var(--mono);font-size:10px;letter-spacing:.12em;text-transform:uppercase;color:var(--ink-faint);margin:20px 0 7px}
+  .scenariohead strong{color:var(--navy)}
+
+  @media (max-width:900px){
+    .wrap{padding:28px 18px 60px}
+    h1{font-size:27px}
+    .colhead{display:none}
+    .row.s0,.row.s1,.row.s2{grid-template-columns:26px 1fr}
+    .verdict,.disp{grid-column:2;text-align:left;padding-top:8px}
+    .roadmap{grid-template-columns:1fr}.roadmap .step{border-right:0;border-bottom:1px solid var(--rule)}.roadmap .step:last-child{border-bottom:0}
+    .rules,.readygrid,.crossnote,.branches{grid-template-columns:1fr}.bridgegrid{grid-template-columns:1fr}.arrow{transform:rotate(90deg)}
+    .crosswalk{overflow-x:auto}.crosswalk table{min-width:900px}
+  }
+  @media (prefers-reduced-motion:reduce){*{transition:none!important}}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">Working session · KPA-3273</p>
+  <h1>One control, or two?</h1>
+  <p class="standfirst">
+    A worked example of how to take the control and testing that exist today, determine the control
+    boundary, and translate the result into the new control-and-attribute format.
+  </p>
+
+  <div class="roadmap" aria-label="Approach used in this example">
+    <div class="step"><span class="num">Step 1</span><strong>Start with today</strong><br>Read the control and what the team actually tests.</div>
+    <div class="step"><span class="num">Step 2</span><strong>Find the boundary</strong><br>Separate controls from attributes using failure logic and ownership.</div>
+    <div class="step"><span class="num">Step 3</span><strong>Map old testing</strong><br>Account for every TOD and TOE step before changing the format.</div>
+    <div class="step"><span class="num">Step 4</span><strong>Build the new test</strong><br>Turn the mapped work into control-specific design work and attributes.</div>
+    <div class="step"><span class="num">Step 5</span><strong>RCM before / after</strong><br>Show leadership a planning row now; refine or split it once facts are known.</div>
+    <div class="step"><span class="num">Step 6</span><strong>Resolve gaps</strong><br>Identify what the walkthrough must establish before testing can proceed.</div>
+  </div>
+
+  <div class="chain">
+    <span><b>KPA-3273</b> Issue Management</span>
+    <span class="sep">→</span>
+    <span><b>Risk ID TBD</b> Issue &amp; ORE Governance</span>
+    <span class="sep">·</span>
+    <span>Inherent risk High</span>
+    <span class="sep">·</span>
+    <span>Control ID <b>TBD</b> — nothing is being undone</span>
+  </div>
+
+  <div class="assume">
+    <b>What this rests on</b>
+    Built from the control record and test plan. No walkthrough, no conversation with the
+    business. The record supports a working hypothesis, not a final control count. Two facts
+    decide the structure, and they are the first two questions of the walkthrough:
+    <ol>
+      <li>Is the Gap Intake Form completed inside the system of record, or completed separately
+        and then entered into it?</li>
+      <li>Who performs the review and challenge — G&amp;C, or another function?</li>
+    </ol>
+  </div>
+
+  <div class="stages" role="tablist" aria-label="Stage">
+    <button role="tab" id="t0" aria-selected="true">Start with today</button>
+    <button role="tab" id="t1" aria-selected="false">Find the boundary</button>
+    <button role="tab" id="t2" aria-selected="false">Map old testing</button>
+    <button role="tab" id="t3" aria-selected="false">Build new test</button>
+    <button role="tab" id="t4" aria-selected="false">RCM before / after</button>
+    <button role="tab" id="t5" aria-selected="false">Resolve gaps</button>
+  </div>
+  <p class="stage-note" id="note" aria-live="polite"></p>
+
+  <div class="teaching" id="teach"><strong>Teaching point:</strong> Do not begin by rewriting the control description. Begin by understanding the activities the team is actually performing and testing today.</div>
+
+  <div class="ledger" id="ledger">
+
+    <!-- ── stage 0 headers -->
+    <div class="colhead s0" data-stage="0"><span></span><span>The record today</span>
+      <span>Tested by</span></div>
+
+    <div class="row s0" data-stage="0">
+      <div class="mark" data-m="none">—</div>
+      <div>
+        <span class="id">Control ID TBD · Higher · Preventive · Ad hoc · Manual</span>
+        <p class="name">Issue &amp; ORE Intake Governance</p>
+        <p class="desc">
+          “USCS Governance &amp; Control, as potential Gaps are identified by the BU,
+          <strong>assesses</strong> them against applicable enterprise requirements to determine
+          whether they meet the criteria for Issues or Operational Risk Events,
+          <strong>coordinates</strong> required review and challenge, and
+          <strong>records</strong> applicable information and determinations in the system of
+          record.”
+        </p>
+        <ul class="attrs">
+          <li><span class="n">a</span><span>Gap Assessment &amp; Determination — Gap Intake Form and supporting documentation</span></li>
+          <li><span class="n">b</span><span>Review &amp; Challenge — evidence of review and challenge</span></li>
+          <li><span class="n">c</span><span>System of Record — recorded information compared to the form</span></li>
+        </ul>
+      </div>
+      <div class="disp" data-m="none">One workpaper<small>TOE Step 2 already tests three things, with separate evidence for each</small></div>
+    </div>
+
+    <!-- ── stage 1 headers -->
+    <div class="colhead s1" data-stage="1"><span></span><span>If this failed on its own…</span>
+      <span style="text-align:center">Risk?</span><span>Because</span><span>So</span></div>
+
+    <div class="row s1" data-stage="1">
+      <div class="mark" data-m="keep">✓</div>
+      <div>
+        <p class="name">The determination is wrong</p>
+        <p class="desc">A Gap that should have been an Issue is closed as neither. Challenge
+          happened. Recording was perfect.</p>
+      </div>
+      <div class="verdict" data-v="yes">YES</div>
+      <div><p class="desc">A control weakness goes unidentified, and nothing else in this process
+        catches it.</p></div>
+      <div class="disp" data-m="keep">Its own control</div>
+    </div>
+
+    <div class="row s1" data-stage="1">
+      <div class="mark" data-m="keep">✓</div>
+      <div>
+        <p class="name">The record is late or incomplete</p>
+        <p class="desc">Determination correct. Challenge done.</p>
+      </div>
+      <div class="verdict" data-v="yes">YES</div>
+      <div><p class="desc">The Issue exists but nothing downstream can track, report or escalate
+        it — which is what this KPA exists to do.</p></div>
+      <div class="disp" data-m="keep">Its own control<small>unless the form IS the system</small></div>
+    </div>
+
+    <div class="row s1" data-stage="1">
+      <div class="mark" data-m="drop">✕</div>
+      <div>
+        <p class="name">The challenge didn’t happen</p>
+        <p class="desc">But the assessment was right anyway.</p>
+      </div>
+      <div class="verdict" data-v="no">NO</div>
+      <div><p class="desc">Nothing bad occurred. The challenge exists to catch a wrong
+        assessment — it is a check on that activity, not a separate mitigation.</p></div>
+      <div class="disp" data-m="defer">An attribute<small>of the assessment control</small></div>
+    </div>
+
+    <!-- ── stage 2 headers -->
+    <div class="colhead s2" data-stage="3"><span></span><span>Proposed control</span>
+      <span>Covers</span></div>
+
+    <div class="row s2" data-stage="3">
+      <div class="mark" data-m="keep">1</div>
+      <div>
+        <span class="id">Higher · Preventive · Ad hoc, on referral of a Gap · Manual</span>
+        <p class="name">Gap Assessment, Review and Challenge, and Issue / ORE Determination</p>
+        <ul class="attrs">
+          <li><span class="n">1</span><span>A completed Gap Intake Form exists for the referred Gap</span></li>
+          <li><span class="n">2</span><span>The assessment evidences the [enterprise requirement criteria] applied</span></li>
+          <li><span class="n">3</span><span>The determination — Issue, ORE or neither — is supported by the form and documentation</span></li>
+          <li><span class="n">4</span><span>Where the Gap met neither, the basis is documented</span></li>
+          <li><span class="n">5</span><span>Review and challenge performed by [reviewer role] before the determination was finalized, with the conclusion evidenced</span></li>
+        </ul>
+      </div>
+      <div class="disp" data-m="keep">TOE 2a + 2b<small>Existing execution testing remapped here</small></div>
+    </div>
+
+    <div class="row s2" data-stage="3">
+      <div class="mark" data-m="keep">2</div>
+      <div>
+        <span class="id">Higher · Preventive · Ad hoc, on each determination · Manual</span>
+        <p class="name">Recording of Intake Information in the System of Record</p>
+        <ul class="attrs">
+          <li><span class="n">1</span><span>Recorded in [system] within [required timeline]</span></li>
+          <li><span class="n">2</span><span>Recorded information agrees to the Gap Intake Form, documentation and review outcome</span></li>
+          <li><span class="n">3</span><span>All [required fields] complete</span></li>
+        </ul>
+      </div>
+      <div class="disp" data-m="keep">TOE 2c<small>Existing execution testing remapped here</small></div>
+    </div>
+
+    <div class="row s2" data-stage="3" style="border-bottom:0">
+      <div></div>
+      <div class="conditional">
+        <div class="lab">Add a third only if</div>
+        <p class="desc" style="color:var(--ink)">the review and challenge is performed by a
+          function <strong>outside</strong> USCS Governance &amp; Control. A reviewer in another
+          function is a different control owner, and owner boundaries force a split regardless of
+          the failure logic. The testing approach can still reuse shared process evidence where appropriate, but each resulting control is concluded on separately.</p>
+      </div>
+      <div></div>
+    </div>
+
+  </div>
+
+  <!-- ── the question, shown on stage 1 -->
+  <div class="question" id="qbox" hidden>
+    <h2>The question</h2>
+    <p class="big">If this activity failed on its own — everything else done correctly — would
+      the risk actually materialize?</p>
+    <p class="sub"><strong>Yes</strong> → it is its own control.
+      <strong>No</strong> → it is an attribute of the control it supports.</p>
+    <p class="sub"><em>Why the obvious test doesn’t work:</em> people reach for “different person,
+      different system, different evidence”. A monthly reconciliation has a preparer and a
+      reviewer, separate people and separate evidence — and nobody splits it into two controls.
+      Those differences tell you to ask the question. They don’t answer it.</p>
+    <div class="rules">
+      <div class="rulecard"><div class="lab">Rule 1 · Failure logic</div><p>If the activity can fail on its own — with everything else working — and <strong>cause the risk outcome</strong>, treat it as a separate control.</p></div>
+      <div class="rulecard"><div class="lab">Rule 2 · Ownership</div><p>A control needs one owner. If activities cross a <strong>function boundary</strong>, split the control even where the activities support the same risk response.</p></div>
+    </div>
+    <p class="sub"><em>Important:</em> different people, systems or evidence are clues to investigate the boundary. They do not determine it by themselves.</p>
+  </div>
+
+  <div class="crosswalk" id="crosswalk" hidden>
+    <h2>Where every existing TOD and TOE step goes</h2>
+    <div class="dimlegend">
+      <div><b>WHY</b> Risk linkage</div>
+      <div><b>WHO</b> Performer — authority, SoD, override</div>
+      <div><b>WHAT</b> The activity — criteria and thresholds</div>
+      <div><b>WHERE</b> Placement — right point in the process</div>
+      <div><b>WHEN</b> Cadence or trigger</div>
+      <div><b>HOW</b> Information and evidence — reperformance</div>
+    </div>
+    <p class="lead" style="margin-top:-6px"><strong>WHERE is placement, not evidence location.</strong>
+      Evidence and reperformability is HOW. Getting these two the wrong way round is the most common
+      error in the first draft of a 5Ws &amp; H assessment.</p>
+    <p class="lead"><strong>Nothing disappears just because the control boundary changes.</strong> Some work remains common process/testing setup, some is evaluated through the 5Ws &amp; H for a resulting control, and some becomes a specific TOE attribute. A few statements are absorbed because the new structure tests the underlying requirement more directly.</p>
+    <table>
+      <thead><tr><th>Existing requirement</th><th>New TOD — where</th><th>New TOE — where</th><th>Disposition / why</th></tr></thead>
+      <tbody>
+        <tr><td>TOD 1 — Receive potential Gaps</td><td><span class="tag">When</span><span class="tag">Who</span><br>Establish the referral/receipt trigger and the parties. WHEN carries the trigger; WHO carries the referring and receiving roles. Completeness of referrals is a Process Understanding / coverage question, not a dimension of this control.</td><td><strong>No sample-level attribute.</strong> Population completeness &amp; accuracy remains in common TOE setup.</td><td><span class="status move">Moved, not lost</span><br>Receipt triggers the control; it is not itself the risk-mitigating assessment. Testing one received Gap cannot prove all Gaps were referred.</td></tr>
+        <tr><td>TOD 1 / TOD 2 — Assess against enterprise requirements</td><td><span class="tag">What</span><span class="tag">Who</span><span class="tag">Why</span><span class="tag">How</span><br>WHAT: the criteria applied and the thresholds separating Issue, ORE and neither. WHO: assessor authority and independence. WHY: risk linkage. HOW: whether the form and evidence let an independent person reperform the assessment.</td><td><strong>Control 1 · A2</strong> — applicable criteria evidenced as applied.<br><strong>Control 1 · A3</strong> — determination supported.</td><td><span class="status keep">Retained</span><br>The old broad design statement is decomposed into the design evaluation plus observable execution criteria.</td></tr>
+        <tr><td>TOD 1 / TOD 2 — Review &amp; challenge</td><td><span class="tag">Who</span><span class="tag">What</span><span class="tag">When</span><span class="tag">How</span><br>WHO: reviewer authority and independence from the assessor. WHAT: scope of the challenge. WHEN: review before finalization. HOW: whether the reviewer’s conclusion leaves a retrievable artefact rather than a conversation.</td><td><strong>Control 1 · A5</strong> — required review/challenge performed before finalization and conclusion evidenced.</td><td><span class="status keep">Retained as attribute</span><br>Fully tested. Under the current two-control working hypothesis it is an attribute; if another function owns the review, it becomes a separate control.</td></tr>
+        <tr><td>TOD 1 / TOD 2 — Record complete, accurate and timely information</td><td><span class="tag">Who</span><span class="tag">What</span><span class="tag">When</span><span class="tag">Where</span><span class="tag">How</span><br>WHO: recorder and whether the system enforces the entry. WHAT: required fields and system. WHEN: the recording deadline. WHERE: placement — is this a control, or a log written after the risk has already passed? HOW: whether a finalization timestamp exists to test timeliness against.</td><td><strong>Control 2 · A1</strong> timeliness<br><strong>Control 2 · A2</strong> accuracy/agreement<br><strong>Control 2 · A3</strong> completeness</td><td><span class="status keep">Retained</span><br>Under the two-control working hypothesis this is Control 2. If recording is one integrated act with assessment, these become attributes of the single control; if review is separately owned, recording shifts to Control 3.</td></tr>
+        <tr><td>TOD 1 / TOD 2 — Handle “neither Issue nor ORE” determinations</td><td><span class="tag">What</span><span class="tag">Who</span><span class="tag">When</span><span class="tag">Where</span><br>WHAT: the criteria that make a Gap neither. WHO / WHEN: who concludes and reviews, and by when. WHERE: placement matters most here — a “neither” determination is the one outcome nothing downstream ever re-examines.</td><td><strong>Control 1 · A3</strong> — determination supported.<br><strong>Control 1 · A4</strong> — basis for neither documented.<br><strong>Control 1 · A5</strong> — review/challenge where required.</td><td><span class="status keep">Retained and consolidated</span><br>No separate test step is needed because “neither” is one outcome of the same assessment control. Sampling still must include these cases.</td></tr>
+        <tr><td>TOD 2 — Gap Intake Form captures sufficient information</td><td><span class="tag">What</span><span class="tag">How</span><br>WHAT: whether the form requires the criteria applied and the rationale, not just the conclusion. HOW: whether what it captures is enough for an independent person to reperform.</td><td><strong>Control 1 · A1–A5</strong> collectively demonstrate whether the mechanism produces the required outputs.</td><td><span class="status absorb">Absorbed, not lost</span><br>Not repeated as a separate design bullet because WHAT/HOW plus the resulting attributes test the underlying sufficiency more directly.</td></tr>
+        <tr><td>TOE 1 — Population, C&amp;A and sample selection</td><td>Not a 5Ws &amp; H dimension. The walkthrough establishes the population source and how the process is initiated.</td><td><strong>Common TOE setup remains.</strong> Obtain the population, validate completeness &amp; accuracy, and select the sample per methodology. Include “neither” determinations for Control 1.</td><td><span class="status keep">Retained once where appropriate</span><br>Related controls may share the same validated population/sample; splitting the control does not require duplicating administrative testing.</td></tr>
+        <tr><td>TOE 2a — Gap Assessment &amp; Determination</td><td>Design supported by the Control 1 5Ws &amp; H evaluation above.</td><td><strong>Control 1 · A2</strong> criteria applied<br><strong>Control 1 · A3</strong> determination supported<br><strong>Control 1 · A4</strong> neither basis documented, when applicable</td><td><span class="status keep">Redistributed</span><br>The existing execution test becomes explicit attributes of the control it is actually testing.</td></tr>
+        <tr><td>TOE 2b — Review &amp; Challenge</td><td>Design supported by Control 1 WHO / WHAT / WHEN / HOW.</td><td><strong>Control 1 · A5</strong> under the two-control working hypothesis.</td><td><span class="status keep">Redistributed conditionally</span><br>Same evidence and expectation. If another function owns review/challenge, this becomes the TOE for a separate review control instead.</td></tr>
+        <tr><td>TOE 2c — System of Record</td><td>Design supported by Control 2 WHO / WHAT / WHEN / WHERE / HOW.</td><td><strong>Control 2 · A1–A3</strong> under the two-control working hypothesis.</td><td><span class="status keep">Redistributed conditionally</span><br>If recording is separate, these are the operating-effectiveness criteria for the recording control. If assessment and official recording are one integrated act, they remain attributes of the single control. If review is separately owned, recording becomes Control 3.</td></tr>
+      </tbody>
+    </table>
+    <div class="crossnote">
+      <div><strong>Shared testing tables are still allowed.</strong> Each control must have its own design conclusion and TOE conclusion, and any issue is raised against the specific control it affects. Where controls flow in sequence and the same sample/evidence supports multiple controls, the team may use one shared testing table and reference or reuse that table across the related control records rather than create several near-identical tables with different test steps. The testing evidence can be shared; the control conclusions cannot.</div>
+      <div><strong>The two genuine disposition changes.</strong> “Receives potential Gaps” moves to trigger/coverage rather than a sample attribute. “Form captures sufficient information” is absorbed into WHAT/HOW plus the explicit attributes rather than repeated as a standalone design criterion.</div>
+    </div>
+  </div>
+
+  <!-- ── decision table, shown with the boundary stage -->
+  <div class="decide" id="dbox" hidden>
+    <table>
+      <thead><tr><th>If…</th><th>…then</th><th>Controls</th></tr></thead>
+      <tbody>
+        <tr>
+          <td>Assessment/determination and official recording occur as one integrated act in the system of record</td>
+          <td>The assessment and official record are created through the same integrated execution. No separate recording step can fail after the assessment succeeds.</td>
+          <td class="out alt">ONE</td>
+        </tr>
+        <tr class="now">
+          <td>Assessment/determination is completed before a separate official recording step, and review remains inside G&amp;C</td>
+          <td>Recording can fail after a correct assessment. Review remains an attribute of the assessment control.</td>
+          <td class="out now">TWO — working hypothesis</td>
+        </tr>
+        <tr>
+          <td>Recording is separate, and review/challenge is owned by another function</td>
+          <td>Recording can fail independently, and review has a different control owner.</td>
+          <td class="out alt">THREE</td>
+        </tr>
+      </tbody>
+    </table>
+    <p class="sub" style="margin-top:12px"><strong>Same timing does not mean the same control.</strong>
+      The question is not whether two activities happen at the same moment. It is whether they are
+      one integrated act, or whether one can still fail after the other has succeeded.</p>
+  </div>
+
+  <div class="bridge" id="bridge" hidden>
+    <div class="lab">Working hypothesis shown below: TWO controls</div>
+    <p class="lead"><strong>This is not the predetermined answer.</strong> The mapping below shows where the testing lands if the walkthrough confirms that recording can fail separately and review/challenge remains within G&amp;C. If the facts support one or three controls, the same testing is retained but regrouped accordingly.</p>
+    <div class="bridgegrid">
+      <div class="bridgebox"><strong>TOE 2a + 2b</strong><br>Assessment/determination and review/challenge</div>
+      <div class="arrow">→</div>
+      <div class="bridgebox"><strong>Control 1 · Attributes 2–5</strong><br>Assessment/determination plus review/challenge, if G&amp;C owns the review.</div>
+      <div class="bridgebox"><strong>TOE 2c</strong><br>System-of-record entry compared to source documentation</div>
+      <div class="arrow">→</div>
+      <div class="bridgebox"><strong>Control 2 · Attributes 1–3</strong><br>Only if official recording is a separate act that can fail independently.</div>
+    </div>
+
+    <div class="branchintro"><strong>If the team has already completed the walkthrough:</strong>
+      do not walk them through the hypothetical. Confirm the two facts, then go straight to the
+      matching structure — the RCM tab shows the finished row set for one, two and three controls.
+      The “before” is the same current workpaper in every case; only the “after” changes.</div>
+  </div>
+
+  <div class="rcmview" id="rcmview" hidden>
+    <h2>What the RCM row looks like before and after the walkthrough</h2>
+    <p class="lead">The RCM should exist during planning so leadership can see what the team intends to test.
+      The walkthrough does not create the test plan from scratch; it validates and refines a planning
+      hypothesis. The row becomes more specific as facts are confirmed, and may split into multiple rows
+      if the walkthrough establishes separate controls. Building it before the walkthrough is the right
+      sequence — it just has to be built as something that will change.</p>
+    <p class="lead"><strong>A process walkthrough and a control walkthrough answer different questions.</strong>
+      Process understanding is written to explain how work flows end to end. Control boundaries need a
+      narrower set of facts — whether one activity can fail after another has succeeded, and who owns each
+      one. A process walkthrough can be complete and still not answer those, so expect to go back for
+      specific facts. That is a normal second pass, not rework.</p>
+
+    <div class="rcmflow">
+      <span class="step"><strong>1</strong> Current documented row</span><span class="arr">→</span>
+      <span class="step"><strong>2</strong> Planning hypothesis</span><span class="arr">→</span>
+      <span class="step"><strong>3</strong> Walkthrough validates facts</span><span class="arr">→</span>
+      <span class="step"><strong>4</strong> Finalize row(s) before TOE</span>
+    </div>
+
+    <div class="rcmblock">
+      <h3>Before — the current single row</h3>
+      <p class="hint">This is the control as presently documented: one row bundles assessment, review/challenge and recording. Leadership can see the intended TOD and TOE, but the row does not yet distinguish which activities are independently operating controls.</p>
+      <div class="rcmtablewrap"><table class="rcmtable">
+        <thead><tr><th>Control title</th><th>Control description</th><th>Control objective</th><th>TOD — walkthrough</th><th>TOD — design assessment</th><th>TOE — population / sample</th><th>TOE — execution</th><th>Status / assumptions</th></tr></thead>
+        <tbody><tr>
+          <td class="ctrl">Issue &amp; ORE Intake Governance</td>
+          <td class="long">USCS Governance &amp; Control, as potential Gaps are identified by the BU, assesses them against applicable enterprise requirements to determine whether they meet the criteria for Issues or OREs, coordinates required review and challenge, and records applicable information and determinations in the system of record.</td>
+          <td class="long">Ensure potential Gaps are appropriately assessed, subject to applicable review and challenge, and accurately recorded in accordance with applicable enterprise requirements.</td>
+          <td class="test">Walk through one potential Gap end-to-end: receipt; assessment; review/challenge; system recording; and handling of “neither Issue nor ORE” determinations.</td>
+          <td class="test">Assess whether mechanisms support consistent assessment; review/challenge; complete, accurate and timely recording; support for “neither” determinations; and sufficient information in the Gap Intake Form.</td>
+          <td class="test">Obtain the population of potential Gaps, validate completeness and accuracy, and sample per IAG requirements. Include “neither” determinations.</td>
+          <td class="test">2a — assess Gap assessment/determination. 2b — verify review/challenge. 2c — compare system-of-record information for completeness, accuracy and timeliness.</td>
+          <td class="status"><span class="provisional">Current documented structure</span><br>One row; control boundaries not yet validated for this exercise.</td>
+        </tr></tbody>
+      </table></div>
+    </div>
+
+    <div class="rcmblock">
+      <h3>Revised planning row — before the walkthrough</h3>
+      <p class="hint">Keep one row while that is the currently identified control, but make the planned audit approach and unresolved facts explicit. This gives leadership a usable RCM during planning without pretending the team already knows the walkthrough outcome.</p>
+      <div class="rcmtablewrap"><table class="rcmtable">
+        <thead><tr><th>Control title</th><th>Preliminary control description</th><th>Planning basis</th><th>Planned TOD</th><th>Planned TOE</th><th>Planned attributes / criteria</th><th>Population / sampling</th><th>Status / facts to validate</th></tr></thead>
+        <tbody><tr>
+          <td class="ctrl">Issue &amp; ORE Intake Governance <br><span class="provisional">Preliminary — structure to validate</span></td>
+          <td class="long">Based on current documentation, G&amp;C assesses referred Gaps against applicable enterprise requirements, obtains required review/challenge, and records the resulting determination in the official record. Walkthrough will determine whether these activities represent one integrated control or separate controls.</td>
+          <td class="long">Current control record + existing TOD/TOE. Planning hypothesis only; no control count is finalized until the team confirms the process facts.</td>
+          <td class="test"><strong>Walk through one end-to-end Gap and evaluate the 5Ws.</strong> Confirm: how intake occurs; who performs assessment and review; applicable criteria; where assessment/rationale are documented; whether completing the assessment also creates the official record or recording is separate; required timing/fields; and how “neither” determinations are handled.</td>
+          <td class="test"><strong>Planned execution coverage:</strong> validate the Gap population and sample per methodology; include “neither” determinations; inspect assessment against applicable criteria; test support for the determination; verify required review/challenge; and test complete, accurate and timely official recording. Final TOE attributes will be assigned to the resulting control(s) after walkthrough validation.</td>
+          <td class="test">Preliminary: criteria applied; determination supported; “neither” basis documented; required review/challenge evidenced; official record complete/accurate/timely. <span class="provisional">Specific policy, reviewer, timeframe and required fields TBD through walkthrough.</span></td>
+          <td class="test"><span class="shared">Common setup planned:</span> Gap intake population; completeness &amp; accuracy; IAG sample selection; deliberate inclusion of “neither” cases. Reuse across resulting controls where the same population/sample is appropriate.</td>
+          <td class="status"><span class="provisional">Pre-walkthrough</span><br>Validate 2 structural facts: (1) integrated vs separate recording; (2) owner of review/challenge. Also close criteria, timing, fields and evidence.</td>
+        </tr></tbody>
+      </table></div>
+      <div class="rcmnote"><strong>Planning principle:</strong> enter the walkthrough with a supportable
+        hypothesis, not a blank RCM. Use “TBD through walkthrough” where precision is not yet supported —
+        a labelled unknown is a stronger planning artefact than a confident guess. The walkthrough
+        validates and refines the row; it is not the first time leadership should see the planned
+        approach.</div>
+    </div>
+
+    <div class="rcmblock">
+      <h3>After — the row(s) once walkthrough facts are known</h3>
+      <p class="hint">The same planning row can remain one row or split into two or three. The examples below show the RCM structure — including exactly where the existing TOE work lands — for each possible walkthrough outcome.</p>
+
+      <div class="scenariohead"><strong>Outcome A · ONE control</strong> — assessment/determination and official recording are one integrated act; review/challenge remains with the same owner.</div>
+      <div class="rcmtablewrap"><table class="rcmtable">
+        <thead><tr><th>Control</th><th>Validated control description</th><th>TOD / 5Ws &amp; H design evaluation</th><th>TOE attributes</th><th>Population / sampling</th><th>Status</th></tr></thead>
+        <tbody><tr>
+          <td class="ctrl">Integrated Gap Assessment, Review &amp; Challenge, Determination and Recording</td>
+          <td class="long">G&amp;C assesses each referred Gap against the applicable criteria within the official system, documents a supported Issue/ORE/neither determination, obtains required review/challenge before finalization, and finalization creates the complete, accurate and timely official record.</td>
+          <td class="test"><strong>WHY:</strong> appropriate identification of Issues/OREs and a governable official record. <strong>WHO:</strong> assessor + reviewer, same owner. <strong>WHAT:</strong> criteria applied, thresholds, required fields. <strong>WHERE:</strong> placement at intake, preventive — a “neither” outcome is never re-examined downstream. <strong>WHEN:</strong> ad hoc on referral; review before finalization. <strong>HOW:</strong> can an independent person reperform from the form, supporting documentation and review evidence?</td>
+          <td class="test"><strong>A1</strong> completed assessment record exists; <strong>A2</strong> applicable criteria evidenced; <strong>A3</strong> determination supported; <strong>A4</strong> “neither” basis documented; <strong>A5</strong> review/challenge evidenced before finalization; <strong>A6</strong> finalized within required timeline; <strong>A7</strong> official record agrees to underlying support; <strong>A8</strong> required information complete. <br><span class="shared">Old TOE 2a + 2b + 2c all remain here.</span></td>
+          <td class="test">Common TOE 1 remains: validate population C&amp;A and sample per methodology; include “neither” cases.</td>
+          <td class="status"><span class="confirmed">Walkthrough validated · ONE control</span><br>One design conclusion + one OE conclusion.</td>
+        </tr></tbody>
+      </table></div>
+
+      <div class="scenariohead"><strong>Outcome B · TWO controls</strong> — official recording is a separate act; review/challenge remains within G&amp;C.</div>
+      <div class="rcmtablewrap"><table class="rcmtable">
+        <thead><tr><th>Control</th><th>Validated control description</th><th>TOD / 5Ws &amp; H design evaluation</th><th>TOE attributes</th><th>Population / sampling</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="ctrl">1 · Gap Assessment, Review &amp; Challenge, and Issue / ORE Determination</td>
+            <td class="long">G&amp;C assesses each referred Gap against applicable enterprise criteria, documents a supported Issue/ORE/neither determination, and obtains required review/challenge before the determination is finalized.</td>
+            <td class="test"><strong>WHY:</strong> prevent inappropriate classification or dismissal of a referred Gap. <strong>WHO:</strong> assessor + G&amp;C reviewer; reviewer independent of the assessor. <strong>WHAT:</strong> criteria and thresholds separating Issue, ORE and neither. <strong>WHERE:</strong> at intake, before disposition — preventive. <strong>WHEN:</strong> ad hoc on referral; review before finalization. <strong>HOW:</strong> form captures criteria applied and rationale; review conclusion leaves a retrievable artefact.</td>
+            <td class="test"><strong>A1</strong> completed assessment record; <strong>A2</strong> criteria applied; <strong>A3</strong> determination supported; <strong>A4</strong> “neither” basis documented; <strong>A5</strong> review/challenge evidenced before finalization. <br><span class="shared">Old TOE 2a → A2–A4; old TOE 2b → A5.</span></td>
+            <td class="test" rowspan="2"><span class="shared">Shared where appropriate:</span> one validated Gap population and sample can support both controls. Include “neither” cases for Control 1.</td>
+            <td class="status"><span class="confirmed">Walkthrough validated · Control 1 of 2</span><br>Separate design + OE conclusion.</td>
+          </tr>
+          <tr>
+            <td class="ctrl">2 · Recording of Intake Information in the System of Record</td>
+            <td class="long">Following a completed determination, G&amp;C records the applicable intake information and outcome in the official system completely, accurately and within the required timeframe.</td>
+            <td class="test"><strong>WHY:</strong> enable downstream tracking, reporting, escalation and governance. <strong>WHO:</strong> recorder; does the system enforce entry? <strong>WHAT:</strong> required fields, system, timeframe — all three currently unstated. <strong>WHERE:</strong> after finalization, before the reporting cycle that consumes the record — test this, or it is a log rather than a control. <strong>WHEN:</strong> the recording deadline; without one, attribute 1 has no criterion. <strong>HOW:</strong> is there a finalization timestamp to measure timeliness against?</td>
+            <td class="test"><strong>A1</strong> recorded within required timeline; <strong>A2</strong> record agrees to form/support/review outcome; <strong>A3</strong> required information complete. <br><span class="shared">Old TOE 2c → A1–A3.</span></td>
+            <td class="status"><span class="confirmed">Walkthrough validated · Control 2 of 2</span><br>Separate design + OE conclusion.</td>
+          </tr>
+        </tbody>
+      </table></div>
+
+      <div class="scenariohead"><strong>Outcome C · THREE controls</strong> — recording is separate and review/challenge is owned by another function.</div>
+      <div class="rcmtablewrap"><table class="rcmtable">
+        <thead><tr><th>Control</th><th>Validated control description</th><th>TOD / 5Ws &amp; H design evaluation</th><th>TOE attributes</th><th>Population / sampling</th><th>Status</th></tr></thead>
+        <tbody>
+          <tr>
+            <td class="ctrl">1 · Gap Assessment &amp; Issue / ORE Determination</td>
+            <td class="long">G&amp;C assesses each referred Gap against applicable enterprise criteria and documents a supported Issue/ORE/neither determination for review/finalization.</td>
+            <td class="test">5Ws &amp; H for the assessor, assessment criteria/mechanism, trigger/timing, evidence location and risk purpose.</td>
+            <td class="test"><strong>A1</strong> assessment record exists; <strong>A2</strong> criteria applied; <strong>A3</strong> determination supported; <strong>A4</strong> “neither” basis documented. <br><span class="shared">Old TOE 2a.</span></td>
+            <td class="test" rowspan="3"><span class="shared">Share the validated Gap population/sample where appropriate.</span> Each control still receives its own design and OE conclusion. “Neither” sampling remains relevant to Control 1.</td>
+            <td class="status"><span class="confirmed">Walkthrough validated · Control 1 of 3</span></td>
+          </tr>
+          <tr>
+            <td class="ctrl">2 · Review &amp; Challenge of Gap Determination</td>
+            <td class="long">[Separate function] independently reviews/challenges the assessment and resulting determination at the required point in the process and evidences its conclusion.</td>
+            <td class="test">5Ws &amp; H for the separate reviewer/control owner: reviewer authority, review scope, required timing, evidence location and purpose.</td>
+            <td class="test">Attributes specify appropriate reviewer; required review scope; completion before finalization; and evidenced conclusion. <br><span class="shared">Old TOE 2b.</span></td>
+            <td class="status"><span class="confirmed">Walkthrough validated · Control 2 of 3</span></td>
+          </tr>
+          <tr>
+            <td class="ctrl">3 · Recording of Intake Information in the System of Record</td>
+            <td class="long">Following the completed determination/review, the responsible role records required intake information and outcome in the official system completely, accurately and within the required timeframe.</td>
+            <td class="test">5Ws &amp; H for the separate recording activity: recorder, required data, timing, system and downstream governance purpose.</td>
+            <td class="test"><strong>A1</strong> timely; <strong>A2</strong> accurate/agrees to source and review outcome; <strong>A3</strong> complete. <br><span class="shared">Old TOE 2c.</span></td>
+            <td class="status"><span class="confirmed">Walkthrough validated · Control 3 of 3</span></td>
+          </tr>
+        </tbody>
+      </table></div>
+      <div class="rcmnote"><strong>What leadership should be able to see at every point:</strong> which controls the team currently plans to test, why they matter, the planned TOD and TOE, the expected population/sample, and which details remain provisional. After the walkthrough, the same view becomes more specific — and the row count changes only if the process facts support a different control structure.</div>
+    </div>
+  </div>
+
+  <div class="ready" id="readybox" hidden>
+    <h2>Before the test can be executed</h2>
+    <p class="lead">Once the control boundary is clear, the next question is whether each attribute is specific enough to test. The walkthrough closes the facts the current record does not tell us.</p>
+    <div class="readygrid">
+      <div class="readyitem"><strong>Criteria</strong>Which enterprise requirements apply, and which version?</div>
+      <div class="readyitem"><strong>Timing</strong>What is the required timeline for recording?</div>
+      <div class="readyitem"><strong>Completeness</strong>Which fields or information are required?</div>
+      <div class="readyitem"><strong>Review</strong>Who is authorized to perform review and challenge, and when?</div>
+      <div class="readyitem"><strong>Evidence</strong>What demonstrates the assessment, review conclusion and system entry?</div>
+      <div class="readyitem"><strong>Where the process walkthrough lives</strong>For the pilot: a separate Word document attached to the audit, referenced from Section 3 of the workpaper. Use the draft template or your own — it is not vetted yet, and the workpaper only needs the reference.</div>
+      <div class="readyitem"><strong>Coverage</strong>How does G&amp;C know every identified Gap was referred? If nothing detects omissions, this may be a Process Understanding coverage gap rather than an attribute.</div>
+    </div>
+  </div>
+
+  <div class="ask">
+    <b>What I need from you.</b>
+    Walk me from a Gap arriving to the record existing — how many systems does it touch?
+    Who performs the review and challenge?
+    What are the “applicable enterprise requirements” — which policy, which version?
+    What is the required timeline for recording?
+    And how does G&amp;C know it has received every Gap the business identified?
+    <br><br>
+    The first two decide the structure. The next two decide whether the attributes can be tested
+    at all. The last one may not be a control question — if nothing detects unreferred Gaps,
+    that is a coverage gap for the Process Understanding workstep.
+  </div>
+
+</div>
+
+<script>
+(function(){
+  var LEDGER_STAGES={0:1,1:1,3:1};
+  var NOTES=[
+    "Start with what exists today. The control description gives us three activities — assesses, coordinates and records — and TOE Step 2 already tests them separately. The existing test plan is our evidence of what the team is actually doing; we are not starting from a blank page.",
+    "Now determine the control boundary. Ask the failure question for each activity, then apply the ownership rule. Activities are the starting point for analysis — they are not automatically separate controls.",
+    "Before building anything new, account for every existing TOD and TOE requirement. This is the reconciliation step: show exactly what stays common, what is evaluated through the 5Ws &amp; H &amp; H, what becomes an attribute, and what is absorbed or moved — with a reason.",
+    "Build the test using the branch the facts support. If the team already completed the walkthrough, confirm the two decision facts and jump directly to ONE, TWO or THREE controls. The current two-control view is only a worked hypothesis; the testing is regrouped, not discarded.",
+    "Use the RCM as a living planning view. Show leadership the planned control and test approach before walkthrough, identify what is provisional, then refine or split the row only when walkthrough facts support it.",
+    "Last, the readiness check. A supportable boundary is not the same as an executable test. Each attribute needs a named criterion, a named reviewer, a defined timeline and defined required fields before another auditor could run this test and reach the same conclusion."
+  ];
+  var tabs=[document.getElementById("t0"),document.getElementById("t1"),document.getElementById("t2"),document.getElementById("t3"),document.getElementById("t4"),document.getElementById("t5")];
+  var rows=Array.prototype.slice.call(document.querySelectorAll("[data-stage]"));
+  var note=document.getElementById("note");
+  var qbox=document.getElementById("qbox"), dbox=document.getElementById("dbox"), crosswalk=document.getElementById("crosswalk"), bridge=document.getElementById("bridge"), rcmview=document.getElementById("rcmview"), readybox=document.getElementById("readybox"), ledger=document.getElementById("ledger"), teach=document.getElementById("teach");
+  var TEACH=[
+    "Do not begin by rewriting the control description. Begin by understanding the activities the team is actually performing and testing today.",
+    "Different activities are not automatically different controls. Failure logic establishes the risk boundary; ownership establishes whether activities can live in the same control.",
+    "Nothing is allowed to vanish silently. Reconcile each old TOD and TOE requirement to its precise new home, while making clear that the control number and attribute numbering shown are conditional on the walkthrough outcome.",
+    "Testing evidence can be shared; control conclusions cannot. Where sequential controls use the same sample and evidence, use one shared testing table and reference it across the related control records, while concluding on design and operating effectiveness separately for each control and raising issues at the specific control level.",
+    "Planning does not wait for the walkthrough. Populate a supportable preliminary row, label unresolved facts, then let walkthrough evidence refine the control description, attributes and even the number of RCM rows.",
+    "An attribute you cannot execute is not a finished attribute. Close the criteria, the reviewer, the timeline, the required fields and the evidence — those are the facts that let a second auditor test this the same way."
+  ];
+
+  function set(stage){
+    tabs.forEach(function(t,i){t.setAttribute("aria-selected",i===stage?"true":"false");});
+    note.textContent=NOTES[stage];
+    teach.innerHTML="<strong>Teaching point:</strong> "+TEACH[stage];
+    rows.forEach(function(el){
+      el.classList.toggle("is-hidden", el.dataset.stage!==String(stage));
+    });
+    ledger.hidden = !LEDGER_STAGES[stage];
+    qbox.hidden = stage!==1;
+    dbox.hidden = stage!==1;
+    crosswalk.hidden = stage!==2;
+    bridge.hidden = stage!==3;
+    rcmview.hidden = stage!==4;
+    readybox.hidden = stage!==5;
+  }
+  tabs.forEach(function(t,i){
+    t.addEventListener("click",function(){set(i);});
+    t.addEventListener("keydown",function(e){
+      var n=null;
+      if(e.key==="ArrowRight") n=(i+1)%tabs.length;
+      if(e.key==="ArrowLeft")  n=(i-1+tabs.length)%tabs.length;
+      if(n!==null){e.preventDefault();tabs[n].focus();set(n);}
+    });
+  });
+  set(0);
+})();
+</script>
+</body>
+</html>

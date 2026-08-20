@@ -1,0 +1,224 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Where your TOD and TOE steps went</title>
+<style>
+  :root{
+    --paper:#FCFCFD; --ink:#1A2233; --ink-soft:#5A6478; --ink-faint:#9AA3B2;
+    --rule:#DFE3E8; --rule-strong:#B9C0CB; --navy:#1F3864;
+    --keep:#2F6B4F; --defer:#9A6B15; --wash:#F3F5F8; --amber:#FDF6E6;
+    --mono:ui-monospace,SFMono-Regular,"SF Mono",Menlo,Consolas,monospace;
+    --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;
+    --serif:Georgia,"Iowan Old Style","Times New Roman",serif;
+  }
+  *{box-sizing:border-box}
+  html,body{margin:0;padding:0}
+  body{background:var(--paper);color:var(--ink);font-family:var(--sans);font-size:16px;
+       line-height:1.5;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1160px;margin:0 auto;padding:40px 32px 72px}
+  .eyebrow{font-family:var(--mono);font-size:11.5px;letter-spacing:.16em;text-transform:uppercase;
+           color:var(--ink-faint);margin:0 0 10px}
+  h1{font-family:var(--serif);font-size:32px;line-height:1.15;font-weight:400;margin:0 0 12px}
+  .standfirst{max-width:80ch;color:var(--ink-soft);font-size:16px;margin:0 0 28px}
+
+  h2{font-family:var(--serif);font-size:23px;font-weight:400;margin:34px 0 4px;
+     border-top:2px solid var(--navy);padding-top:15px}
+  .lead{font-size:14.5px;color:var(--ink-soft);max-width:94ch;margin:0 0 15px}
+  .lead strong{color:var(--ink)}
+
+  table{width:100%;border-collapse:collapse;font-size:13.5px;background:#fff}
+  th{font-family:var(--mono);font-size:10px;letter-spacing:.11em;text-transform:uppercase;
+     color:var(--ink-faint);text-align:left;font-weight:400;padding:8px 10px;
+     border-bottom:1px solid var(--rule-strong)}
+  td{padding:12px 10px;border-bottom:1px solid var(--rule);vertical-align:top;color:var(--ink-soft);
+     line-height:1.45}
+  td:first-child{color:var(--ink);font-weight:600;width:29%}
+  td b{color:var(--ink)}
+  .dim{font-family:var(--mono);font-size:10px;letter-spacing:.09em;padding:2px 6px;
+       border:1px solid var(--rule-strong);border-radius:2px;margin:0 4px 3px 0;
+       color:var(--navy);background:var(--wash);display:inline-block}
+  .att{font-family:var(--mono);font-size:11.5px;color:var(--navy);font-weight:600}
+  .c2{font-family:var(--mono);font-size:9.5px;letter-spacing:.08em;text-transform:uppercase;
+      color:var(--defer)}
+
+  .note{margin-top:14px;background:var(--wash);border-left:3px solid var(--navy);padding:14px 17px;
+        font-size:14px;color:var(--ink-soft);max-width:96ch}
+  .note b{color:var(--ink)}
+  .amberbox{margin-top:14px;background:var(--amber);border-left:3px solid var(--defer);padding:14px 17px;
+            font-size:14px;color:var(--ink);max-width:96ch}
+  .amberbox b{display:block;font-family:var(--mono);font-size:10.5px;letter-spacing:.12em;
+              text-transform:uppercase;color:var(--defer);margin-bottom:5px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <p class="eyebrow">Control test workpaper · pilot</p>
+  <h1>Where your TOD and TOE steps went</h1>
+  <p class="standfirst">
+    The two halves move differently, and that is the part worth getting straight. TOE steps become
+    testing attributes. TOD steps do not — they become 5Ws &amp; H content, with the answers in the
+    control record and the evaluation in Section 4 of the workpaper.
+  </p>
+
+  <h2>TOD steps</h2>
+  <p class="lead">Your TOD steps describe what the design has to be. In the new format you no longer write
+    a paragraph concluding on each one. Each becomes a design dimension: the <strong>answer</strong> sits
+    in the Key Control record, and <strong>whether that answer is good enough</strong> is the Assessment
+    Rationale in Section 4. <span class="c2">C2</span> marks the ones that move to the recording control
+    if the split holds.</p>
+
+  <table>
+    <thead><tr><th>Existing TOD step</th><th>Becomes which dimension</th><th>What you now write, and where</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>TOD 1 — Receives potential Gaps identified by the BU</td>
+        <td><span class="dim">WHEN</span><span class="dim">WHO</span></td>
+        <td>Record: the trigger is referral of a Gap; the referring and receiving roles. Section 4: whether
+          an event-driven trigger is clear and comprehensive. <b>Not an attribute</b> — testing one
+          sampled Gap cannot show that every Gap was referred. That completeness question goes to Process
+          Understanding.</td>
+      </tr>
+      <tr>
+        <td>TOD 1 — Assesses potential Gaps against applicable enterprise requirements</td>
+        <td><span class="dim">WHAT</span><span class="dim">WHY</span></td>
+        <td>Record: which policy and version, and the thresholds separating Issue, ORE and neither.
+          Section 4: whether those criteria are written down well enough that two people reach the same
+          determination, and whether the control addresses the risk.</td>
+      </tr>
+      <tr>
+        <td>TOD 1 — Coordinates applicable review and challenge</td>
+        <td><span class="dim">WHO</span><span class="dim">WHEN</span><span class="dim">HOW</span></td>
+        <td>Record: reviewer role, authority to overturn, required timing. Section 4: whether the reviewer
+          is independent of the assessor, and whether the challenge leaves a retrievable artefact rather
+          than a conversation.</td>
+      </tr>
+      <tr>
+        <td>TOD 1 — Records applicable information and determinations in the system of record
+          <span class="c2">C2</span></td>
+        <td><span class="dim">WHAT</span><span class="dim">WHEN</span><span class="dim">WHERE</span><span class="dim">HOW</span></td>
+        <td>Record: system, required fields, recording deadline. Section 4: whether a deadline exists at
+          all, and whether a finalization timestamp exists to measure against.</td>
+      </tr>
+      <tr>
+        <td>TOD 1 — Handles Gaps that do not meet Issue or ORE criteria</td>
+        <td><span class="dim">WHAT</span><span class="dim">WHERE</span></td>
+        <td>Record: the criteria for a "neither" conclusion and how it is documented. Section 4: placement
+          — this is the one outcome nothing downstream ever re-examines, which is why the control has to
+          be preventive here.</td>
+      </tr>
+      <tr>
+        <td>TOD 2.1 — Mechanism supports consistent assessment and determination</td>
+        <td><span class="dim">WHAT</span><span class="dim">WHY</span></td>
+        <td>Same dimensions as TOD 1's assessment step. The old design criterion and the old walkthrough
+          step were asking the same question from two directions; they now meet in one rationale.</td>
+      </tr>
+      <tr>
+        <td>TOD 2.2 — Mechanism provides for applicable review and challenge</td>
+        <td><span class="dim">WHO</span><span class="dim">HOW</span></td>
+        <td>Section 4 rationale on reviewer independence and evidence. If another function owns the
+          review, this moves to a separate control with its own Section 4.</td>
+      </tr>
+      <tr>
+        <td>TOD 2.3 — Mechanism supports complete, accurate and timely recording
+          <span class="c2">C2</span></td>
+        <td><span class="dim">WHAT</span><span class="dim">WHEN</span><span class="dim">HOW</span></td>
+        <td>Section 4 of the recording workpaper. If recording turns out to be one integrated act with the
+          assessment, it stays in the single control's Section 4 instead.</td>
+      </tr>
+      <tr>
+        <td>TOD 2.4 — Mechanism supports and documents "neither" determinations</td>
+        <td><span class="dim">WHAT</span></td>
+        <td>Folded into the WHAT rationale rather than concluded separately — "neither" is one outcome of
+          the same determination, not a second mechanism.</td>
+      </tr>
+      <tr>
+        <td>TOD 2.5 — Gap Intake Form captures sufficient information</td>
+        <td><span class="dim">WHAT</span><span class="dim">HOW</span></td>
+        <td><b>Absorbed.</b> No standalone conclusion that the form is "sufficient." WHAT asks whether the
+          form requires the criteria and rationale rather than just the conclusion; HOW asks whether that
+          is enough to reperform from. The attributes then show whether it actually produced them.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>The check:</b> if one of your TOD steps turned into a testing attribute, look again — you have
+    probably duplicated something already on the TOE side. TOD asks whether the design would work when
+    performed correctly. TOE asks whether it was performed correctly.
+  </div>
+
+  <h2>TOE steps</h2>
+  <p class="lead">These become the attributes, written once in Section 3 and carried into Section 8. The
+    third column is the part that matters most: what had to be <strong>named</strong> to make each one
+    executable by someone other than you.</p>
+
+  <table>
+    <thead><tr><th>Existing TOE step</th><th>Becomes</th><th>What had to be named</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>TOE 2a — Inspect the completed Gap Intake Form and supporting documentation against applicable
+          enterprise requirements and determine whether the Gap was appropriately assessed and the
+          resulting determination was reasonable and supported</td>
+        <td>
+          <span class="att">A1</span> A completed Gap Intake Form exists for the referred Gap.<br><br>
+          <span class="att">A2</span> The assessment documents the applicable enterprise criteria
+          <b>[policy, version]</b> applied.<br><br>
+          <span class="att">A3</span> The determination — Issue, ORE or neither — is supported by the
+          assessment and documentation inspected.<br><br>
+          <span class="att">A4</span> Where neither, the basis is documented.
+        </td>
+        <td><b>Which policy and which version.</b> "Applicable enterprise requirements" is the whole
+          criterion for A2, and it is currently unnamed.<br><br>
+          "Appropriately" and "reasonable" were dropped rather than replaced — neither is checkable.
+          "Supported" survives because it names what the support is compared to.<br><br>
+          A4 came from the TOD side, not the TOE. It is N/A on most instances, so the sample has to be
+          selected to exercise it.</td>
+      </tr>
+      <tr>
+        <td>TOE 2b — Verify that applicable review and challenge was performed over the assessment and
+          resulting determination in accordance with enterprise requirements</td>
+        <td><span class="att">A5</span> The required review and challenge is performed by
+          <b>[reviewer role]</b> before the determination is finalized, and the reviewer's conclusion is
+          evidenced.</td>
+        <td><b>The reviewer role, the timing, and what counts as evidence.</b> "Applicable" and "in
+          accordance with enterprise requirements" were carrying all three of those unstated.</td>
+      </tr>
+      <tr>
+        <td>TOE 2c — Compare the information recorded in the system of record to the Gap Intake Form and
+          supporting documentation to determine whether it was complete, accurate and timely
+          <span class="c2">C2</span></td>
+        <td>
+          <span class="att">A1</span> Recorded in <b>[system]</b> within <b>[required timeframe]</b> of
+          finalization.<br><br>
+          <span class="att">A2</span> The recorded information agrees to the form, the supporting
+          documentation and the review outcome.<br><br>
+          <span class="att">A3</span> All <b>[required fields]</b> are complete.
+        </td>
+        <td><b>The system, the timeframe, and the field list.</b> Without a timeframe, "timely" has no
+          criterion. Without a field list, "complete" has nothing to be complete against.<br><br>
+          The review outcome was added as a comparison point; the old step did not mention it.</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div class="note">
+    <b>Why 2c became three and 2b stayed one.</b> Complete, accurate and timely fail for different reasons
+    and are proved by different evidence, and a single mark tells a reviewer that something failed without
+    saying which. Right reviewer, right time, evidenced are conditions of a single act — remove any one and
+    the review did not happen — so they stay together as one mark.
+  </div>
+
+  <div class="amberbox">
+    <b>The brackets are the point</b>
+    Every <b>[policy, version]</b>, <b>[reviewer role]</b>, <b>[required timeframe]</b> and
+    <b>[required fields]</b> above is a fact the current documentation does not contain. They are not
+    formatting to tidy up later — they are the walkthrough agenda, and they are the difference between a
+    test step that reads well and one two auditors execute the same way.
+  </div>
+
+</div>
+</body>
+</html>
